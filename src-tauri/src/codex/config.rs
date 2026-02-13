@@ -124,7 +124,7 @@ pub(crate) fn config_toml_path() -> Option<PathBuf> {
 pub(crate) fn read_config_model(codex_home: Option<PathBuf>) -> Result<Option<String>, String> {
     let root = codex_home.or_else(resolve_default_codex_home);
     let Some(root) = root else {
-        return Err("Unable to resolve CODEX_HOME".to_string());
+        return Err("Unable to resolve config home (OPENCODE_HOME)".to_string());
     };
     read_config_model_from_root(&root)
 }

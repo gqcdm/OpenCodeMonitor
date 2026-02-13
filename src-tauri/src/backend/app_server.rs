@@ -12,6 +12,9 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::timeout;
 
+use crate::backend::event_translator::{
+    self, SessionTranslationState,
+};
 use crate::backend::events::{AppServerEvent, EventSink};
 use crate::codex::args::parse_codex_args;
 use crate::shared::process_core::{kill_child_process_tree, tokio_command};
@@ -39,16 +42,11 @@ fn extract_thread_id(value: &Value) -> Option<String> {
         })
 }
 
-fn build_initialize_params(client_version: &str) -> Value {
+fn build_initialize_params(_client_version: &str) -> Value {
+    // ACP v1 protocol: only protocolVersion is required.
+    // No clientInfo/capabilities/initialized notification needed.
     json!({
-        "clientInfo": {
-            "name": "codex_monitor",
-            "title": "Codex Monitor",
-            "version": client_version
-        },
-        "capabilities": {
-            "experimentalApi": true
-        }
+        "protocolVersion": 1
     })
 }
 
@@ -62,6 +60,8 @@ pub(crate) struct WorkspaceSession {
     pub(crate) next_id: AtomicU64,
     /// Callbacks for background threads - events for these threadIds are sent through the channel
     pub(crate) background_thread_callbacks: Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>,
+    /// ACP → CodexMonitor event translation state (turn IDs, item IDs, tool-call mapping).
+    pub(crate) translation_state: Mutex<SessionTranslationState>,
 }
 
 impl WorkspaceSession {
@@ -209,7 +209,7 @@ pub(crate) fn build_codex_command_with_bin(
     let bin = codex_bin
         .clone()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "codex".into());
+        .unwrap_or_else(|| "opencode".into());
 
     let path_env = build_codex_path_env(codex_bin.as_deref());
     let mut command_args = parse_codex_args(codex_args)?;
@@ -265,14 +265,15 @@ pub(crate) async fn check_codex_installation(
     let output = match timeout(Duration::from_secs(5), command.output()).await {
         Ok(result) => result.map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
-                "Codex CLI not found. Install Codex and ensure `codex` is on your PATH.".to_string()
+                "OpenCode CLI not found. Install OpenCode and ensure `opencode` is on your PATH."
+                    .to_string()
             } else {
                 e.to_string()
             }
         })?,
         Err(_) => {
             return Err(
-                "Timed out while checking Codex CLI. Make sure `codex --version` runs in Terminal."
+                "Timed out checking OpenCode CLI. Make sure `opencode --version` runs in Terminal."
                     .to_string(),
             );
         }
@@ -288,11 +289,11 @@ pub(crate) async fn check_codex_installation(
         };
         if detail.is_empty() {
             return Err(
-                "Codex CLI failed to start. Try running `codex --version` in Terminal.".to_string(),
+                "OpenCode CLI failed. Try running `opencode --version` in Terminal.".to_string(),
             );
         }
         return Err(format!(
-            "Codex CLI failed to start: {detail}. Try running `codex --version` in Terminal."
+            "OpenCode CLI failed: {detail}. Try running `opencode --version` in Terminal."
         ));
     }
 
@@ -308,9 +309,10 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     entry: WorkspaceEntry,
     default_codex_bin: Option<String>,
     codex_args: Option<String>,
-    codex_home: Option<PathBuf>,
+    _codex_home: Option<PathBuf>,
     client_version: String,
     event_sink: E,
+    acp_port: u16,
 ) -> Result<Arc<WorkspaceSession>, String> {
     let codex_bin = entry
         .codex_bin
@@ -322,12 +324,16 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     let mut command = build_codex_command_with_bin(
         codex_bin,
         codex_args.as_deref(),
-        vec!["app-server".to_string()],
+        vec![
+            "acp".to_string(),
+            "--port".to_string(),
+            acp_port.to_string(),
+            "--cwd".to_string(),
+            entry.path.clone(),
+        ],
     )?;
-    command.current_dir(&entry.path);
-    if let Some(codex_home) = codex_home {
-        command.env("CODEX_HOME", codex_home);
-    }
+    // Don't set current_dir — ACP uses --cwd instead.
+    // Don't set CODEX_HOME — OpenCode uses ~/.config/opencode/.
     command.stdin(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
@@ -344,6 +350,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         pending: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
         background_thread_callbacks: Mutex::new(HashMap::new()),
+        translation_state: Mutex::new(SessionTranslationState::new(String::new())),
     });
 
     let session_clone = Arc::clone(&session);
@@ -371,29 +378,32 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
             };
 
             let maybe_id = value.get("id").and_then(|id| id.as_u64());
-            let has_method = value.get("method").is_some();
+            let method = value.get("method").and_then(|m| m.as_str()).map(String::from);
             let has_result_or_error = value.get("result").is_some() || value.get("error").is_some();
-
-            // Check if this event is for a background thread
-            let thread_id = extract_thread_id(&value);
 
             if let Some(id) = maybe_id {
                 if has_result_or_error {
+                    // Response to a request we sent — resolve the pending oneshot.
                     if let Some(tx) = session_clone.pending.lock().await.remove(&id) {
                         let _ = tx.send(value);
                     }
-                } else if has_method {
-                    // Check for background thread callback
-                    let mut sent_to_background = false;
-                    if let Some(ref tid) = thread_id {
-                        let callbacks = session_clone.background_thread_callbacks.lock().await;
-                        if let Some(tx) = callbacks.get(tid) {
-                            let _ = tx.send(value.clone());
-                            sent_to_background = true;
+                } else if let Some(ref m) = method {
+                    // JSON-RPC request FROM ACP (has id + method) — e.g. requestPermission.
+                    if m == "requestPermission" {
+                        let session_id = {
+                            session_clone.translation_state.lock().await.session_id.clone()
+                        };
+                        if let Some(translated) =
+                            event_translator::translate_permission_request(&value, &session_id)
+                        {
+                            let payload = AppServerEvent {
+                                workspace_id: workspace_id.clone(),
+                                message: translated,
+                            };
+                            event_sink_clone.emit_app_server_event(payload);
                         }
-                    }
-                    // Don't emit to frontend if this is a background thread event
-                    if !sent_to_background {
+                    } else {
+                        // Unknown server→client request — forward as-is.
                         let payload = AppServerEvent {
                             workspace_id: workspace_id.clone(),
                             message: value,
@@ -403,28 +413,52 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
                 } else if let Some(tx) = session_clone.pending.lock().await.remove(&id) {
                     let _ = tx.send(value);
                 }
-            } else if has_method {
-                // Check for background thread callback
-                let mut sent_to_background = false;
-                if let Some(ref tid) = thread_id {
-                    let callbacks = session_clone.background_thread_callbacks.lock().await;
-                    if let Some(tx) = callbacks.get(tid) {
-                        let _ = tx.send(value.clone());
-                        sent_to_background = true;
-                    }
-                }
-                // Don't emit to frontend if this is a background thread event
-                if !sent_to_background {
-                    let payload = AppServerEvent {
-                        workspace_id: workspace_id.clone(),
-                        message: value,
+            } else if let Some(ref m) = method {
+                // Notification (no id).
+                if m == "session/update" {
+                    // ACP sessionUpdate → translate to CodexMonitor event(s).
+                    let translated = {
+                        let mut ts = session_clone.translation_state.lock().await;
+                        event_translator::translate_acp_event(&value, &mut ts)
                     };
-                    event_sink_clone.emit_app_server_event(payload);
+                    for msg in translated {
+                        let payload = AppServerEvent {
+                            workspace_id: workspace_id.clone(),
+                            message: msg,
+                        };
+                        event_sink_clone.emit_app_server_event(payload);
+                    }
+                } else {
+                    // Non-sessionUpdate notification — check background callbacks or forward.
+                    let thread_id = extract_thread_id(&value);
+                    let mut sent_to_background = false;
+                    if let Some(ref tid) = thread_id {
+                        let callbacks = session_clone.background_thread_callbacks.lock().await;
+                        if let Some(tx) = callbacks.get(tid) {
+                            let _ = tx.send(value.clone());
+                            sent_to_background = true;
+                        }
+                    }
+                    if !sent_to_background {
+                        let payload = AppServerEvent {
+                            workspace_id: workspace_id.clone(),
+                            message: value,
+                        };
+                        event_sink_clone.emit_app_server_event(payload);
+                    }
                 }
             }
         }
 
-        // Ensure pending foreground requests cannot accumulate after process output ends.
+        // Signal frontend that the ACP process has disconnected.
+        event_sink_clone.emit_app_server_event(AppServerEvent {
+            workspace_id: workspace_id.clone(),
+            message: json!({
+                "method": "codex/disconnected",
+                "params": {}
+            }),
+        });
+
         session_clone.pending.lock().await.clear();
     });
 
@@ -449,7 +483,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
 
     let init_params = build_initialize_params(&client_version);
     let init_result = timeout(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         session.send_request("initialize", init_params),
     )
     .await;
@@ -459,13 +493,13 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
             let mut child = session.child.lock().await;
             kill_child_process_tree(&mut child).await;
             return Err(
-                "Codex app-server did not respond to initialize. Check that `codex app-server` works in Terminal."
+                "OpenCode ACP did not respond to initialize. Check that `opencode acp` works in Terminal."
                     .to_string(),
             );
         }
     };
     init_response?;
-    session.send_notification("initialized", None).await?;
+    // ACP v1: no `initialized` notification needed (unlike Codex).
 
     let payload = AppServerEvent {
         workspace_id: entry.id.clone(),
@@ -503,14 +537,13 @@ mod tests {
     }
 
     #[test]
-    fn build_initialize_params_enables_experimental_api() {
+    fn build_initialize_params_sets_protocol_version() {
         let params = build_initialize_params("1.2.3");
         assert_eq!(
             params
-                .get("capabilities")
-                .and_then(|caps| caps.get("experimentalApi"))
-                .and_then(|value| value.as_bool()),
-            Some(true)
+                .get("protocolVersion")
+                .and_then(|value| value.as_u64()),
+            Some(1)
         );
     }
 }

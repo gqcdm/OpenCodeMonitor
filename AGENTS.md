@@ -1,4 +1,4 @@
-# CodexMonitor Agent Guide
+# OpenCodeMonitor Agent Guide
 
 All docs must be canonical, with no past commentary, only live state.
 
@@ -12,12 +12,38 @@ Detailed navigation/runbooks live in:
 
 ## Project Snapshot
 
-CodexMonitor is a Tauri app that orchestrates Codex agents across local workspaces.
+OpenCodeMonitor is a fork of [CodexMonitor](https://github.com/Dimillian/CodexMonitor) — a Tauri desktop app that orchestrates coding agents across local workspaces. The backend has been replaced: instead of Codex CLI, it spawns **OpenCode ACP** (`opencode acp`) as the agent process and translates between ACP's protocol and the original CodexMonitor frontend event shapes.
 
 - Frontend: React + Vite (`src/`)
 - Backend app: Tauri Rust process (`src-tauri/src/lib.rs`)
 - Backend daemon: JSON-RPC process (`src-tauri/src/bin/codex_monitor_daemon.rs`)
 - Shared backend source of truth: `src-tauri/src/shared/*`
+- ACP event translation: `src-tauri/src/backend/event_translator.rs`
+
+## Fork Architecture — ACP Translation Layer
+
+The frontend thread reducer receives events in the **same shape** as original CodexMonitor. All ACP-to-CodexMonitor translation happens in Rust. This is the core design invariant.
+
+Key differences from upstream CodexMonitor:
+
+- **Process spawn**: `opencode acp --port <N> --cwd <path>` instead of Codex CLI. Ports allocated from `AtomicU16` starting at 14096.
+- **Protocol**: ACP uses `session/new`, `session/load`, `session/prompt`, `cancel`, `session/list`. Events arrive as `session/update` notifications.
+- **No turn concept in ACP**: Synthetic `turn/started` and `turn/completed` events are emitted around `session/prompt` calls.
+- **Permission requests**: ACP's `requestPermission` is translated to `codex/requestApproval`. Currently auto-approved by ACP — the approval UI is wired but dormant.
+- **Session creation latency**: 11-17 seconds — frontend shows loading state.
+
+Internal Rust module paths (`codex_core.rs`, `codex/mod.rs`, etc.) are **not renamed** — only user-facing strings. This minimizes merge conflicts with upstream.
+
+### Key Translation Files
+
+- `src-tauri/src/backend/event_translator.rs` — ACP sessionUpdate → CodexMonitor event shapes
+- `src-tauri/src/shared/codex_core.rs` — All protocol methods rewritten for ACP
+- `src-tauri/src/backend/app_server.rs` — Stdout reader routes `session/update` through translator
+
+### Stubbed Features
+
+These Codex-specific features return empty/no-op responses:
+`fork_thread`, `turn_steer`, `start_review`, `model_list`, `account_rate_limits`, `codex_login`, `skills_list`, `apps_list`, `collaboration_mode_list`, `list_mcp_server_status`, `archive_thread`, `set_thread_name`
 
 ## Non-Negotiable Architecture Rules
 
@@ -26,6 +52,7 @@ CodexMonitor is a Tauri app that orchestrates Codex agents across local workspac
 3. Do not duplicate logic between app and daemon.
 4. Keep JSON-RPC method names and payload shapes stable unless intentionally changing contracts.
 5. Keep frontend IPC contracts in sync with backend command surfaces.
+6. All ACP protocol translation happens in Rust — never in the frontend.
 
 ## Backend Routing Rules
 
@@ -70,8 +97,12 @@ Use project aliases for frontend imports:
 - Daemon RPC router: `src-tauri/src/bin/codex_monitor_daemon/rpc.rs`
 - Shared workspaces core: `src-tauri/src/shared/workspaces_core.rs` + `src-tauri/src/shared/workspaces_core/*`
 - Shared git UI core: `src-tauri/src/shared/git_ui_core.rs` + `src-tauri/src/shared/git_ui_core/*`
+- ACP event translator: `src-tauri/src/backend/event_translator.rs`
+- ACP protocol methods: `src-tauri/src/shared/codex_core.rs`
+- ACP process spawn: `src-tauri/src/backend/app_server.rs`
 - Threads reducer entrypoint: `src/features/threads/hooks/useThreadsReducer.ts`
 - Threads reducer slices: `src/features/threads/hooks/threadReducer/*`
+- Spec with wire captures: `../opencode-monitor-spec.md`
 
 For broader path maps, use `docs/codebase-map.md`.
 
@@ -109,6 +140,8 @@ Run validations based on touched areas:
 - Rust backend changes: `cd src-tauri && cargo check`
 - Use targeted tests for touched modules before full-suite runs when iterating.
 
+Known pre-existing failure: `tailscale::daemon_commands::tests::restart_required_for_old_version` — unrelated to the ACP port.
+
 ## Quick Runbook
 
 Core local commands (keep these inline for daily use):
@@ -143,9 +176,13 @@ Use extra care in high-churn/high-complexity files:
 - `src/features/threads/hooks/useThreadsReducer.ts`
 - `src-tauri/src/shared/git_ui_core.rs`
 - `src-tauri/src/shared/workspaces_core.rs`
+- `src-tauri/src/shared/codex_core.rs`
+- `src-tauri/src/backend/event_translator.rs`
+- `src-tauri/src/backend/app_server.rs`
 - `src-tauri/src/bin/codex_monitor_daemon/rpc.rs`
 
 ## Canonical References
 
 - Task-oriented code map: `docs/codebase-map.md`
 - Setup/build/release/test commands: `README.md`
+- ACP protocol spec and wire captures: `../opencode-monitor-spec.md`

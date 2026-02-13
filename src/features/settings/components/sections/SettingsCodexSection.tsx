@@ -252,13 +252,14 @@ export function SettingsCodexSection({
 
   return (
     <section className="settings-section">
-      <div className="settings-section-title">Codex</div>
+      <div className="settings-section-title">OpenCode</div>
       <div className="settings-section-subtitle">
-        Configure the Codex CLI used by CodexMonitor and validate the install.
+        Configure the OpenCode CLI used by OpenCode Monitor and validate the
+        install.
       </div>
       <div className="settings-field">
         <label className="settings-field-label" htmlFor="codex-path">
-          Default Codex path
+          Default OpenCode path
         </label>
         <div className="settings-field-row">
           <input
@@ -287,7 +288,7 @@ export function SettingsCodexSection({
         </div>
         <div className="settings-help">Leave empty to use the system PATH resolution.</div>
         <label className="settings-field-label" htmlFor="codex-args">
-          Default Codex args
+          Default OpenCode args
         </label>
         <div className="settings-field-row">
           <input
@@ -339,7 +340,7 @@ export function SettingsCodexSection({
               void onRunCodexUpdate();
             }}
             disabled={codexUpdateState.status === "running"}
-            title="Update Codex"
+            title="Update OpenCode"
           >
             <Stethoscope aria-hidden />
             {codexUpdateState.status === "running" ? "Updating..." : "Update"}
@@ -349,7 +350,7 @@ export function SettingsCodexSection({
         {doctorState.result && (
           <div className={`settings-doctor ${doctorState.result.ok ? "ok" : "error"}`}>
             <div className="settings-doctor-title">
-              {doctorState.result.ok ? "Codex looks good" : "Codex issue detected"}
+              {doctorState.result.ok ? "OpenCode looks good" : "OpenCode issue detected"}
             </div>
             <div className="settings-doctor-body">
               <div>Version: {doctorState.result.version ?? "unknown"}</div>
@@ -376,9 +377,9 @@ export function SettingsCodexSection({
             <div className="settings-doctor-title">
               {codexUpdateState.result.ok
                 ? codexUpdateState.result.upgraded
-                  ? "Codex updated"
-                  : "Codex already up-to-date"
-                : "Codex update failed"}
+                ? "OpenCode updated"
+                   : "OpenCode already up-to-date"
+                : "OpenCode update failed"}
             </div>
             <div className="settings-doctor-body">
               <div>Method: {codexUpdateState.result.method}</div>
@@ -541,7 +542,7 @@ export function SettingsCodexSection({
         meta={globalAgentsMeta}
         error={globalAgentsError}
         value={globalAgentsContent}
-        placeholder="Add global instructions for Codex agents…"
+        placeholder="Add global instructions for OpenCode agents…"
         disabled={globalAgentsLoading}
         refreshDisabled={globalAgentsRefreshDisabled}
         saveDisabled={globalAgentsSaveDisabled}
@@ -551,7 +552,7 @@ export function SettingsCodexSection({
         onSave={onSaveGlobalAgents}
         helpText={
           <>
-            Stored at <code>~/.codex/AGENTS.md</code>.
+            Stored at <code>~/.config/opencode/AGENTS.md</code>.
           </>
         }
         classNames={{
@@ -572,7 +573,7 @@ export function SettingsCodexSection({
         meta={globalConfigMeta}
         error={globalConfigError}
         value={globalConfigContent}
-        placeholder="Edit the global Codex config.toml…"
+        placeholder="Edit the global OpenCode config.toml…"
         disabled={globalConfigLoading}
         refreshDisabled={globalConfigRefreshDisabled}
         saveDisabled={globalConfigSaveDisabled}
@@ -612,7 +613,7 @@ export function SettingsCodexSection({
                   <input
                     className="settings-input settings-input--compact"
                     value={codexBinOverrideDrafts[workspace.id] ?? ""}
-                    placeholder="Codex binary override"
+                    placeholder="OpenCode binary override"
                     onChange={(event) =>
                       onSetCodexBinOverrideDrafts((prev) => ({
                         ...prev,
@@ -627,7 +628,7 @@ export function SettingsCodexSection({
                       }
                       await onUpdateWorkspaceCodexBin(workspace.id, nextValue);
                     }}
-                    aria-label={`Codex binary override for ${workspace.name}`}
+                    aria-label={`OpenCode binary override for ${workspace.name}`}
                   />
                   <button
                     type="button"
@@ -647,7 +648,7 @@ export function SettingsCodexSection({
                   <input
                     className="settings-input settings-input--compact"
                     value={codexHomeOverrideDrafts[workspace.id] ?? ""}
-                    placeholder="CODEX_HOME override"
+                    placeholder="OPENCODE_HOME override"
                     onChange={(event) =>
                       onSetCodexHomeOverrideDrafts((prev) => ({
                         ...prev,
@@ -664,7 +665,7 @@ export function SettingsCodexSection({
                         codexHome: nextValue,
                       });
                     }}
-                    aria-label={`CODEX_HOME override for ${workspace.name}`}
+                    aria-label={`OPENCODE_HOME override for ${workspace.name}`}
                   />
                   <button
                     type="button"
@@ -686,7 +687,7 @@ export function SettingsCodexSection({
                   <input
                     className="settings-input settings-input--compact"
                     value={codexArgsOverrideDrafts[workspace.id] ?? ""}
-                    placeholder="Codex args override"
+                    placeholder="OpenCode args override"
                     onChange={(event) =>
                       onSetCodexArgsOverrideDrafts((prev) => ({
                         ...prev,
@@ -703,7 +704,7 @@ export function SettingsCodexSection({
                         codexArgs: nextValue,
                       });
                     }}
-                    aria-label={`Codex args override for ${workspace.name}`}
+                    aria-label={`OpenCode args override for ${workspace.name}`}
                   />
                   <button
                     type="button"

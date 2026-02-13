@@ -1,23 +1,18 @@
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
-use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, Mutex};
-use tokio::time::timeout;
-use tokio::time::Instant;
 
 use crate::backend::app_server::WorkspaceSession;
+use crate::backend::event_translator;
+use crate::backend::events::{AppServerEvent, EventSink};
 use crate::codex::config as codex_config;
 use crate::codex::home::{resolve_default_codex_home, resolve_workspace_codex_home};
 use crate::rules;
 use crate::shared::account::{build_account_response, read_auth_account};
 use crate::types::WorkspaceEntry;
-
-const LOGIN_START_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) enum CodexLoginCancelState {
     PendingStart(oneshot::Sender<()>),
@@ -69,9 +64,27 @@ pub(crate) async fn start_thread_core(
     let session = get_session_clone(sessions, &workspace_id).await?;
     let params = json!({
         "cwd": session.entry.path,
-        "approvalPolicy": "on-request"
+        "mcpServers": []
     });
-    session.send_request("thread/start", params).await
+    let response = session.send_request("session/new", params).await?;
+    // ACP returns { sessionId, models, modes, ... }.
+    // Frontend expects { result: { thread: { id: "..." } } }.
+    let session_id = response
+        .get("result")
+        .and_then(|r| r.get("sessionId"))
+        .or_else(|| response.get("sessionId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if !session_id.is_empty() {
+        let mut ts = session.translation_state.lock().await;
+        ts.session_id = session_id.clone();
+    }
+    Ok(json!({
+        "result": {
+            "thread": { "id": session_id }
+        }
+    }))
 }
 
 pub(crate) async fn resume_thread_core(
@@ -80,58 +93,105 @@ pub(crate) async fn resume_thread_core(
     thread_id: String,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id });
-    session.send_request("thread/resume", params).await
+    let params = json!({
+        "sessionId": thread_id,
+        "cwd": session.entry.path,
+        "mcpServers": []
+    });
+    let _response = session.send_request("session/load", params).await?;
+    // session/load replays history as sessionUpdate events (handled by stdout reader).
+    {
+        let mut ts = session.translation_state.lock().await;
+        ts.session_id = thread_id.clone();
+    }
+    Ok(json!({
+        "result": {
+            "thread": { "id": thread_id }
+        }
+    }))
 }
 
 pub(crate) async fn fork_thread_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    thread_id: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
+    _thread_id: String,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id });
-    session.send_request("thread/fork", params).await
+    // ACP has unstable_forkSession but it's too unstable for MVP.
+    Err("fork is not supported in OpenCode ACP yet".to_string())
 }
 
 pub(crate) async fn list_threads_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
-    cursor: Option<String>,
-    limit: Option<u32>,
-    sort_key: Option<String>,
+    _cursor: Option<String>,
+    _limit: Option<u32>,
+    _sort_key: Option<String>,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({
-        "cursor": cursor,
-        "limit": limit,
-        "sortKey": sort_key,
-        // Keep spawned sub-agent sessions visible in thread/list so UI refreshes
-        // do not drop parent -> child sidebar relationships.
-        "sourceKinds": ["cli", "vscode", "subAgentThreadSpawn"]
-    });
-    session.send_request("thread/list", params).await
+    // ACP session/list accepts cwd to scope results.  It does not support
+    // cursor/limit/sortKey — we return all results in one page.
+    let params = json!({ "cwd": session.entry.path });
+    let response = session.send_request("session/list", params).await?;
+    // ACP returns { sessions: [{ sessionId, cwd, title, updatedAt }] }.
+    // Frontend expects { result: { data: [{ id, cwd, ... }], nextCursor } }.
+    let payload = response.get("result").unwrap_or(&response);
+    let sessions_arr = payload
+        .get("sessions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let data: Vec<Value> = sessions_arr
+        .into_iter()
+        .map(|s| {
+            let id = s
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let cwd = s
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let title = s
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let updated_at = s
+                .get("updatedAt")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            json!({
+                "id": id,
+                "cwd": cwd,
+                "name": title,
+                "updatedAt": updated_at,
+                "createdAt": updated_at
+            })
+        })
+        .collect();
+    Ok(json!({
+        "result": {
+            "data": data,
+            "nextCursor": null
+        }
+    }))
 }
 
 pub(crate) async fn list_mcp_server_status_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    cursor: Option<String>,
-    limit: Option<u32>,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
+    _cursor: Option<String>,
+    _limit: Option<u32>,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "cursor": cursor, "limit": limit });
-    session.send_request("mcpServerStatus/list", params).await
+    Ok(json!({ "result": { "data": [], "nextCursor": null } }))
 }
 
 pub(crate) async fn archive_thread_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    thread_id: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
+    _thread_id: String,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id });
-    session.send_request("thread/archive", params).await
+    // No ACP equivalent — archive is UI-only (handled by frontend localStorage).
+    Ok(json!({ "ok": true }))
 }
 
 pub(crate) async fn compact_thread_core(
@@ -139,31 +199,35 @@ pub(crate) async fn compact_thread_core(
     workspace_id: String,
     thread_id: String,
 ) -> Result<Value, String> {
+    // Send /compact as a prompt — ACP has no dedicated compact method.
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id });
-    session.send_request("thread/compact/start", params).await
+    let params = json!({
+        "sessionId": thread_id,
+        "parts": [{ "type": "text", "text": "/compact" }]
+    });
+    session.send_request("session/prompt", params).await
 }
 
 pub(crate) async fn set_thread_name_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    thread_id: String,
-    name: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
+    _thread_id: String,
+    _name: String,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id, "name": name });
-    session.send_request("thread/name/set", params).await
+    // No ACP equivalent — name is stored locally by the frontend.
+    Ok(json!({ "ok": true }))
 }
 
-fn build_turn_input_items(
+/// Build ACP `session/prompt` parts from frontend input.
+fn build_acp_prompt_parts(
     text: String,
     images: Option<Vec<String>>,
     app_mentions: Option<Vec<Value>>,
 ) -> Result<Vec<Value>, String> {
     let trimmed_text = text.trim();
-    let mut input: Vec<Value> = Vec::new();
+    let mut parts: Vec<Value> = Vec::new();
     if !trimmed_text.is_empty() {
-        input.push(json!({ "type": "text", "text": trimmed_text }));
+        parts.push(json!({ "type": "text", "text": trimmed_text }));
     }
     if let Some(paths) = images {
         for path in paths {
@@ -171,13 +235,40 @@ fn build_turn_input_items(
             if trimmed.is_empty() {
                 continue;
             }
-            if trimmed.starts_with("data:")
-                || trimmed.starts_with("http://")
-                || trimmed.starts_with("https://")
-            {
-                input.push(json!({ "type": "image", "url": trimmed }));
+            if trimmed.starts_with("data:") {
+                // data: URI — extract mime + base64
+                // Format: data:<mime>;base64,<data>
+                if let Some(rest) = trimmed.strip_prefix("data:") {
+                    if let Some((mime, data)) = rest.split_once(";base64,") {
+                        parts.push(json!({
+                            "type": "image",
+                            "mimeType": mime,
+                            "data": data
+                        }));
+                        continue;
+                    }
+                }
+                parts.push(json!({ "type": "text", "text": format!("[image: {trimmed}]") }));
+            } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                // URL images — ACP wants base64.  For now pass as text placeholder.
+                parts.push(json!({ "type": "text", "text": format!("[image: {trimmed}]") }));
             } else {
-                input.push(json!({ "type": "localImage", "path": trimmed }));
+                // Local file path — read and base64-encode.
+                match std::fs::read(trimmed) {
+                    Ok(bytes) => {
+                        use base64::Engine;
+                        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let mime = mime_from_extension(trimmed);
+                        parts.push(json!({
+                            "type": "image",
+                            "mimeType": mime,
+                            "data": encoded
+                        }));
+                    }
+                    Err(_) => {
+                        parts.push(json!({ "type": "text", "text": format!("[image: {trimmed}]") }));
+                    }
+                }
             }
         }
     }
@@ -205,143 +296,154 @@ fn build_turn_input_items(
             if !seen_paths.insert(path.to_string()) {
                 continue;
             }
-            input.push(json!({ "type": "mention", "name": name, "path": path }));
+            // Convert app:// mention → resource_link with file:// URI.
+            let file_path = &path["app://".len()..];
+            parts.push(json!({
+                "type": "resource_link",
+                "uri": format!("file://{file_path}"),
+                "name": name
+            }));
         }
     }
-    if input.is_empty() {
+    if parts.is_empty() {
         return Err("empty user message".to_string());
     }
-    Ok(input)
+    Ok(parts)
 }
 
-pub(crate) async fn send_user_message_core(
+fn mime_from_extension(path: &str) -> &str {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".svg") {
+        "image/svg+xml"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+static TURN_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub(crate) async fn send_user_message_core<E: EventSink>(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
     thread_id: String,
     text: String,
-    model: Option<String>,
-    effort: Option<String>,
-    access_mode: Option<String>,
+    _model: Option<String>,
+    _effort: Option<String>,
+    _access_mode: Option<String>,
     images: Option<Vec<String>>,
     app_mentions: Option<Vec<Value>>,
-    collaboration_mode: Option<Value>,
+    _collaboration_mode: Option<Value>,
+    event_sink: &E,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let access_mode = access_mode.unwrap_or_else(|| "current".to_string());
-    let sandbox_policy = match access_mode.as_str() {
-        "full-access" => json!({ "type": "dangerFullAccess" }),
-        "read-only" => json!({ "type": "readOnly" }),
-        _ => json!({
-            "type": "workspaceWrite",
-            "writableRoots": [session.entry.path],
-            "networkAccess": true
-        }),
-    };
+    let parts = build_acp_prompt_parts(text, images, app_mentions)?;
 
-    let approval_policy = if access_mode == "full-access" {
-        "never"
-    } else {
-        "on-request"
-    };
+    // Synthesize turn ID and prepare translation state.
+    let turn_n = TURN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let turn_id = format!("turn_{turn_n}");
+    {
+        let mut ts = session.translation_state.lock().await;
+        ts.start_turn(turn_id.clone());
+    }
 
-    let input = build_turn_input_items(text, images, app_mentions)?;
+    // Emit synthetic turn/started.
+    let started_msg = event_translator::build_turn_started(&thread_id, &turn_id);
+    event_sink.emit_app_server_event(AppServerEvent {
+        workspace_id: workspace_id.clone(),
+        message: started_msg,
+    });
 
-    let mut params = Map::new();
-    params.insert("threadId".to_string(), json!(thread_id));
-    params.insert("input".to_string(), json!(input));
-    params.insert("cwd".to_string(), json!(session.entry.path));
-    params.insert("approvalPolicy".to_string(), json!(approval_policy));
-    params.insert("sandboxPolicy".to_string(), json!(sandbox_policy));
-    params.insert("model".to_string(), json!(model));
-    params.insert("effort".to_string(), json!(effort));
-    if let Some(mode) = collaboration_mode {
-        if !mode.is_null() {
-            params.insert("collaborationMode".to_string(), mode);
+    let params = json!({
+        "sessionId": thread_id,
+        "parts": parts
+    });
+    let result = session.send_request("session/prompt", params).await;
+
+    // Emit synthetic item/completed for agent message (if one was streamed).
+    {
+        let ts = session.translation_state.lock().await;
+        if let Some(msg_completed) = event_translator::build_agent_message_completed(&ts) {
+            event_sink.emit_app_server_event(AppServerEvent {
+                workspace_id: workspace_id.clone(),
+                message: msg_completed,
+            });
         }
     }
-    session
-        .send_request("turn/start", Value::Object(params))
-        .await
+
+    // Emit synthetic turn/completed.
+    let completed_msg = event_translator::build_turn_completed(&thread_id, &turn_id);
+    event_sink.emit_app_server_event(AppServerEvent {
+        workspace_id: workspace_id.clone(),
+        message: completed_msg,
+    });
+
+    result
 }
 
 pub(crate) async fn turn_steer_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    thread_id: String,
-    turn_id: String,
-    text: String,
-    images: Option<Vec<String>>,
-    app_mentions: Option<Vec<Value>>,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
+    _thread_id: String,
+    _turn_id: String,
+    _text: String,
+    _images: Option<Vec<String>>,
+    _app_mentions: Option<Vec<Value>>,
 ) -> Result<Value, String> {
-    if turn_id.trim().is_empty() {
-        return Err("missing active turn id".to_string());
-    }
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let input = build_turn_input_items(text, images, app_mentions)?;
-    let params = json!({
-        "threadId": thread_id,
-        "expectedTurnId": turn_id,
-        "input": input
-    });
-    session.send_request("turn/steer", params).await
+    Err("turn steering is not supported by OpenCode ACP".to_string())
 }
 
 pub(crate) async fn collaboration_mode_list_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    session
-        .send_request("collaborationMode/list", json!({}))
-        .await
+    Ok(json!({ "result": { "data": [] } }))
 }
 
 pub(crate) async fn turn_interrupt_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
     thread_id: String,
-    turn_id: String,
+    _turn_id: String,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id, "turnId": turn_id });
-    session.send_request("turn/interrupt", params).await
+    // ACP uses a `cancel` notification with sessionId.
+    session
+        .send_notification("cancel", Some(json!({ "sessionId": thread_id })))
+        .await?;
+    Ok(json!({ "ok": true }))
 }
 
 pub(crate) async fn start_review_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    thread_id: String,
-    target: Value,
-    delivery: Option<String>,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
+    _thread_id: String,
+    _target: Value,
+    _delivery: Option<String>,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let mut params = Map::new();
-    params.insert("threadId".to_string(), json!(thread_id));
-    params.insert("target".to_string(), target);
-    if let Some(delivery) = delivery {
-        params.insert("delivery".to_string(), json!(delivery));
-    }
-    session
-        .send_request("review/start", Value::Object(params))
-        .await
+    Err("review is not supported by OpenCode ACP".to_string())
 }
 
 pub(crate) async fn model_list_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    session.send_request("model/list", json!({})).await
+    // Models are returned in session/new response — no separate list call needed.
+    Ok(json!({ "result": { "data": [] } }))
 }
 
 pub(crate) async fn account_rate_limits_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    session
-        .send_request("account/rateLimits/read", Value::Null)
-        .await
+    Ok(json!({ "result": {} }))
 }
 
 pub(crate) async fn account_read_core(
@@ -368,162 +470,37 @@ pub(crate) async fn account_read_core(
 }
 
 pub(crate) async fn codex_login_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    codex_login_cancels: &Mutex<HashMap<String, CodexLoginCancelState>>,
-    workspace_id: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _codex_login_cancels: &Mutex<HashMap<String, CodexLoginCancelState>>,
+    _workspace_id: String,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-    {
-        let mut cancels = codex_login_cancels.lock().await;
-        if let Some(existing) = cancels.remove(&workspace_id) {
-            match existing {
-                CodexLoginCancelState::PendingStart(tx) => {
-                    let _ = tx.send(());
-                }
-                CodexLoginCancelState::LoginId(_) => {}
-            }
-        }
-        cancels.insert(
-            workspace_id.clone(),
-            CodexLoginCancelState::PendingStart(cancel_tx),
-        );
-    }
-
-    let start = Instant::now();
-    let mut cancel_rx = cancel_rx;
-    let mut login_request: Pin<Box<_>> =
-        Box::pin(session.send_request("account/login/start", json!({ "type": "chatgpt" })));
-
-    let response = loop {
-        match cancel_rx.try_recv() {
-            Ok(_) => {
-                let mut cancels = codex_login_cancels.lock().await;
-                cancels.remove(&workspace_id);
-                return Err("Codex login canceled.".to_string());
-            }
-            Err(TryRecvError::Closed) => {
-                let mut cancels = codex_login_cancels.lock().await;
-                cancels.remove(&workspace_id);
-                return Err("Codex login canceled.".to_string());
-            }
-            Err(TryRecvError::Empty) => {}
-        }
-
-        let elapsed = start.elapsed();
-        if elapsed >= LOGIN_START_TIMEOUT {
-            let mut cancels = codex_login_cancels.lock().await;
-            cancels.remove(&workspace_id);
-            return Err("Codex login start timed out.".to_string());
-        }
-
-        let tick = Duration::from_millis(150);
-        let remaining = LOGIN_START_TIMEOUT.saturating_sub(elapsed);
-        let wait_for = remaining.min(tick);
-
-        match timeout(wait_for, &mut login_request).await {
-            Ok(result) => break result?,
-            Err(_elapsed) => continue,
-        }
-    };
-
-    let payload = response.get("result").unwrap_or(&response);
-    let login_id = payload
-        .get("loginId")
-        .or_else(|| payload.get("login_id"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| "missing login id in account/login/start response".to_string())?;
-    let auth_url = payload
-        .get("authUrl")
-        .or_else(|| payload.get("auth_url"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| "missing auth url in account/login/start response".to_string())?;
-
-    {
-        let mut cancels = codex_login_cancels.lock().await;
-        cancels.insert(
-            workspace_id,
-            CodexLoginCancelState::LoginId(login_id.clone()),
-        );
-    }
-
-    Ok(json!({
-        "loginId": login_id,
-        "authUrl": auth_url,
-        "raw": response,
-    }))
+    // OpenCode uses `opencode auth login` externally — no in-app login flow.
+    Err("Login is not supported in-app. Run `opencode auth login` in Terminal.".to_string())
 }
 
 pub(crate) async fn codex_login_cancel_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    codex_login_cancels: &Mutex<HashMap<String, CodexLoginCancelState>>,
-    workspace_id: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _codex_login_cancels: &Mutex<HashMap<String, CodexLoginCancelState>>,
+    _workspace_id: String,
 ) -> Result<Value, String> {
-    let cancel_state = {
-        let mut cancels = codex_login_cancels.lock().await;
-        cancels.remove(&workspace_id)
-    };
-
-    let Some(cancel_state) = cancel_state else {
-        return Ok(json!({ "canceled": false }));
-    };
-
-    match cancel_state {
-        CodexLoginCancelState::PendingStart(cancel_tx) => {
-            let _ = cancel_tx.send(());
-            return Ok(json!({
-                "canceled": true,
-                "status": "canceled",
-            }));
-        }
-        CodexLoginCancelState::LoginId(login_id) => {
-            let session = get_session_clone(sessions, &workspace_id).await?;
-            let response = session
-                .send_request(
-                    "account/login/cancel",
-                    json!({
-                        "loginId": login_id,
-                    }),
-                )
-                .await?;
-
-            let payload = response.get("result").unwrap_or(&response);
-            let status = payload
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let canceled = status.eq_ignore_ascii_case("canceled");
-
-            Ok(json!({
-                "canceled": canceled,
-                "status": status,
-                "raw": response,
-            }))
-        }
-    }
+    Ok(json!({ "canceled": false }))
 }
 
 pub(crate) async fn skills_list_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "cwd": session.entry.path });
-    session.send_request("skills/list", params).await
+    Ok(json!({ "result": { "data": [] } }))
 }
 
 pub(crate) async fn apps_list_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    cursor: Option<String>,
-    limit: Option<u32>,
-    thread_id: Option<String>,
+    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    _workspace_id: String,
+    _cursor: Option<String>,
+    _limit: Option<u32>,
+    _thread_id: Option<String>,
 ) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "cursor": cursor, "limit": limit, "threadId": thread_id });
-    session.send_request("app/list", params).await
+    Ok(json!({ "result": { "data": [], "nextCursor": null } }))
 }
 
 pub(crate) async fn respond_to_server_request_core(
@@ -533,7 +510,15 @@ pub(crate) async fn respond_to_server_request_core(
     result: Value,
 ) -> Result<(), String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    session.send_response(request_id, result).await
+    // Frontend sends { decision: "accept" | "decline" } or { answers: {...} }.
+    // For approval decisions, translate to ACP's permission response format.
+    let acp_result = if let Some(decision) = result.get("decision").and_then(|v| v.as_str()) {
+        let accept = decision == "accept";
+        event_translator::build_permission_response(accept)
+    } else {
+        result
+    };
+    session.send_response(request_id, acp_result).await
 }
 
 pub(crate) async fn remember_approval_rule_core(

@@ -267,7 +267,7 @@ export const useSettingsCodexSection = ({
             afterVersion: null,
             upgraded: false,
             output: null,
-            details: "Codex updates are not available in this build.",
+            details: "OpenCode updates are not available in this build.",
           },
         });
         return;

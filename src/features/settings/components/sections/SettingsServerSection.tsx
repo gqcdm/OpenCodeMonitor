@@ -139,7 +139,7 @@ export function SettingsServerSection({
       <div className="settings-section-subtitle">
         {isMobileSimplified
           ? "Choose TCP or Orbit, fill in the connection endpoint and token from your desktop setup, then run a connection test."
-          : "Configure how CodexMonitor exposes backend access for mobile and remote clients. Desktop usage remains local unless you explicitly connect through remote mode."}
+          : "Configure how OpenCode Monitor exposes backend access for mobile and remote clients. Desktop usage remains local unless you explicitly connect through remote mode."}
       </div>
 
       {!isMobileSimplified && (
@@ -199,7 +199,7 @@ export function SettingsServerSection({
             <div>
               <div className="settings-toggle-title">Keep daemon running after app closes</div>
               <div className="settings-toggle-subtitle">
-                If disabled, CodexMonitor stops managed TCP and Orbit daemon processes before exit.
+                If disabled, OpenCode Monitor stops managed TCP and Orbit daemon processes before exit.
               </div>
             </div>
             <button
@@ -259,7 +259,7 @@ export function SettingsServerSection({
               </div>
               <div className="settings-help">
                 {isMobileSimplified
-                  ? "Use the Tailscale host from your desktop CodexMonitor app (Server section), for example `macbook.your-tailnet.ts.net:4732`."
+                  ? "Use the Tailscale host from your desktop OpenCode Monitor app (Server section), for example `macbook.your-tailnet.ts.net:4732`."
                   : "This host/token is used by mobile clients and desktop remote-mode testing."}
               </div>
             </div>
@@ -713,9 +713,9 @@ export function SettingsServerSection({
       <div className="settings-help">
         {isMobileSimplified
           ? appSettings.remoteBackendProvider === "tcp"
-            ? "Use your own infrastructure only. On iOS, get the Tailscale hostname and token from your desktop CodexMonitor setup."
-            : "Use your own infrastructure only. On iOS, use the Orbit websocket URL and token configured on your desktop CodexMonitor setup."
-          : "Mobile access should stay scoped to your own infrastructure (tailnet or self-hosted Orbit). CodexMonitor does not provide hosted backend services."}
+            ? "Use your own infrastructure only. On iOS, get the Tailscale hostname and token from your desktop OpenCode Monitor setup."
+            : "Use your own infrastructure only. On iOS, use the Orbit websocket URL and token configured on your desktop OpenCode Monitor setup."
+          : "Mobile access should stay scoped to your own infrastructure (tailnet or self-hosted Orbit). OpenCode Monitor does not provide hosted backend services."}
       </div>
     </section>
   );

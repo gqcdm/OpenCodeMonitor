@@ -17,6 +17,8 @@ use super::worktree::{
     sanitize_worktree_name, unique_worktree_path, unique_worktree_path_for_rename,
 };
 
+use std::sync::atomic::Ordering;
+
 use crate::backend::app_server::WorkspaceSession;
 use crate::codex::spawn_workspace_session;
 use crate::git_utils::resolve_git_root;
@@ -27,12 +29,14 @@ use crate::types::{WorkspaceEntry, WorkspaceInfo, WorkspaceSettings, WorktreeSet
 
 fn spawn_with_app(
     app: &AppHandle,
+    state: &AppState,
     entry: WorkspaceEntry,
     default_bin: Option<String>,
     codex_args: Option<String>,
     codex_home: Option<PathBuf>,
 ) -> impl std::future::Future<Output = Result<Arc<WorkspaceSession>, String>> {
-    spawn_workspace_session(entry, default_bin, codex_args, app.clone(), codex_home)
+    let port = state.next_acp_port.fetch_add(1, Ordering::SeqCst);
+    spawn_workspace_session(entry, default_bin, codex_args, app.clone(), codex_home, port)
 }
 
 #[tauri::command]
@@ -123,7 +127,7 @@ pub(crate) async fn add_workspace(
         &state.app_settings,
         &state.storage_path,
         |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+            spawn_with_app(&app, &*state, entry, default_bin, codex_args, codex_home)
         },
     )
     .await
@@ -146,7 +150,7 @@ pub(crate) async fn add_clone(
         &state.app_settings,
         &state.storage_path,
         |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+            spawn_with_app(&app, &*state, entry, default_bin, codex_args, codex_home)
         },
     )
     .await
@@ -207,7 +211,7 @@ pub(crate) async fn add_worktree(
             })
         },
         |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+            spawn_with_app(&app, &*state, entry, default_bin, codex_args, codex_home)
         },
     )
     .await
@@ -372,7 +376,7 @@ pub(crate) async fn rename_worktree(
             })
         },
         |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+            spawn_with_app(&app, &*state, entry, default_bin, codex_args, codex_home)
         },
     )
     .await
@@ -470,7 +474,7 @@ pub(crate) async fn update_workspace_settings(
             apply_workspace_settings_update(workspaces, workspace_id, next_settings)
         },
         |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+            spawn_with_app(&app, &*state, entry, default_bin, codex_args, codex_home)
         },
     )
     .await
@@ -522,7 +526,7 @@ pub(crate) async fn connect_workspace(
         &state.sessions,
         &state.app_settings,
         |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+            spawn_with_app(&app, &*state, entry, default_bin, codex_args, codex_home)
         },
     )
     .await

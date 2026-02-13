@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-const GITHUB_URL = "https://github.com/Dimillian/CodexMonitor";
-const TWITTER_URL = "https://x.com/dimillian";
+const GITHUB_URL = "https://github.com/jacob/OpenCodeMonitor";
+const TWITTER_URL = "https://x.com/jacob";
 
 export function AboutView() {
   const [version, setVersion] = useState<string | null>(null);
@@ -44,15 +44,15 @@ export function AboutView() {
           <img
             className="about-icon"
             src="/app-icon.png"
-            alt="Codex Monitor icon"
+            alt="OpenCode Monitor icon"
           />
-          <div className="about-title">Codex Monitor</div>
+          <div className="about-title">OpenCode Monitor</div>
         </div>
         <div className="about-version">
           {version ? `Version ${version}` : "Version —"}
         </div>
         <div className="about-tagline">
-          Monitor the situation of your Codex agents
+          Monitor the situation of your OpenCode agents
         </div>
         <div className="about-divider" />
         <div className="about-links">
@@ -72,7 +72,7 @@ export function AboutView() {
             Twitter
           </button>
         </div>
-        <div className="about-footer">Made with ♥ by Codex & Dimillian</div>
+        <div className="about-footer">Based on CodexMonitor by Dimillian. Powered by OpenCode.</div>
       </div>
     </div>
   );

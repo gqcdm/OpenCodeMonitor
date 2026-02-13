@@ -30,6 +30,7 @@ type AgentCompleted = {
 
 type AppServerEventHandlers = {
   onWorkspaceConnected?: (workspaceId: string) => void;
+  onWorkspaceDisconnected?: (workspaceId: string) => void;
   onThreadStarted?: (workspaceId: string, thread: Record<string, unknown>) => void;
   onThreadNameUpdated?: (
     workspaceId: string,
@@ -96,6 +97,7 @@ export const METHODS_ROUTED_IN_USE_APP_SERVER_EVENTS = [
   "account/updated",
   "codex/backgroundThread",
   "codex/connected",
+  "codex/disconnected",
   "error",
   "item/agentMessage/delta",
   "item/commandExecution/outputDelta",
@@ -140,6 +142,11 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
 
       if (method === "codex/connected") {
         currentHandlers.onWorkspaceConnected?.(workspace_id);
+        return;
+      }
+
+      if (method === "codex/disconnected") {
+        currentHandlers.onWorkspaceDisconnected?.(workspace_id);
         return;
       }
 

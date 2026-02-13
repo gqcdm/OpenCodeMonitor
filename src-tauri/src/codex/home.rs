@@ -35,12 +35,26 @@ pub(crate) fn resolve_workspace_codex_home(
 }
 
 pub(crate) fn resolve_default_codex_home() -> Option<PathBuf> {
+    if let Ok(value) = env::var("OPENCODE_HOME") {
+        if let Some(path) = normalize_codex_home(&value) {
+            return Some(path);
+        }
+    }
     if let Ok(value) = env::var("CODEX_HOME") {
         if let Some(path) = normalize_codex_home(&value) {
             return Some(path);
         }
     }
-    resolve_home_dir().map(|home| home.join(".codex"))
+    let home = resolve_home_dir()?;
+    let opencode_dir = home.join(".config").join("opencode");
+    if opencode_dir.is_dir() {
+        return Some(opencode_dir);
+    }
+    let codex_dir = home.join(".codex");
+    if codex_dir.is_dir() {
+        return Some(codex_dir);
+    }
+    Some(opencode_dir)
 }
 
 fn normalize_codex_home(value: &str) -> Option<PathBuf> {

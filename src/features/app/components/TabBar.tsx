@@ -15,7 +15,7 @@ type TabBarProps = {
 const tabs: { id: TabKey; label: string; icon: ReactNode }[] = [
   { id: "home", label: "Home", icon: <House className="tabbar-icon" /> },
   { id: "projects", label: "Projects", icon: <FolderKanban className="tabbar-icon" /> },
-  { id: "codex", label: "Codex", icon: <MessagesSquare className="tabbar-icon" /> },
+  { id: "codex", label: "Agent", icon: <MessagesSquare className="tabbar-icon" /> },
   { id: "git", label: "Git", icon: <GitBranch className="tabbar-icon" /> },
   { id: "log", label: "Log", icon: <TerminalSquare className="tabbar-icon" /> },
 ];

@@ -68,6 +68,7 @@ use std::fs::File;
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -104,6 +105,7 @@ const DAEMON_NAME: &str = "codex-monitor-daemon";
 fn spawn_with_client(
     event_sink: DaemonEventSink,
     client_version: String,
+    acp_port: u16,
     entry: WorkspaceEntry,
     default_bin: Option<String>,
     codex_args: Option<String>,
@@ -116,6 +118,7 @@ fn spawn_with_client(
         codex_home,
         client_version,
         event_sink,
+        acp_port,
     )
 }
 
@@ -168,6 +171,7 @@ struct DaemonState {
     codex_login_cancels: Mutex<HashMap<String, CodexLoginCancelState>>,
     daemon_mode: String,
     daemon_binary_path: Option<String>,
+    next_acp_port: AtomicU16,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -201,6 +205,7 @@ impl DaemonState {
             codex_login_cancels: Mutex::new(HashMap::new()),
             daemon_mode,
             daemon_binary_path,
+            next_acp_port: AtomicU16::new(15096),
         }
     }
 
@@ -240,6 +245,7 @@ impl DaemonState {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
+                    self.next_acp_port.fetch_add(1, Ordering::SeqCst),
                     entry,
                     default_bin,
                     codex_args,
@@ -288,6 +294,7 @@ impl DaemonState {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
+                    self.next_acp_port.fetch_add(1, Ordering::SeqCst),
                     entry,
                     default_bin,
                     codex_args,
@@ -389,6 +396,7 @@ impl DaemonState {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
+                    self.next_acp_port.fetch_add(1, Ordering::SeqCst),
                     entry,
                     default_bin,
                     codex_args,
@@ -462,6 +470,7 @@ impl DaemonState {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
+                    self.next_acp_port.fetch_add(1, Ordering::SeqCst),
                     entry,
                     default_bin,
                     codex_args,
@@ -505,6 +514,7 @@ impl DaemonState {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
+                    self.next_acp_port.fetch_add(1, Ordering::SeqCst),
                     entry,
                     default_bin,
                     codex_args,
@@ -716,6 +726,7 @@ impl DaemonState {
             images,
             app_mentions,
             collaboration_mode,
+            &self.event_sink,
         )
         .await
     }
@@ -847,6 +858,7 @@ impl DaemonState {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
+                    self.next_acp_port.fetch_add(1, Ordering::SeqCst),
                     entry,
                     default_bin,
                     codex_args,
@@ -1492,6 +1504,7 @@ mod tests {
             codex_login_cancels: Mutex::new(HashMap::new()),
             daemon_mode: "tcp".to_string(),
             daemon_binary_path: Some("/tmp/codex-monitor-daemon".to_string()),
+            next_acp_port: AtomicU16::new(15096),
         }
     }
 

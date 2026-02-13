@@ -23,6 +23,7 @@ pub(crate) async fn spawn_workspace_session(
     codex_args: Option<String>,
     app_handle: AppHandle,
     codex_home: Option<PathBuf>,
+    acp_port: u16,
 ) -> Result<Arc<WorkspaceSession>, String> {
     let client_version = app_handle.package_info().version.to_string();
     let event_sink = TauriEventSink::new(app_handle);
@@ -33,6 +34,7 @@ pub(crate) async fn spawn_workspace_session(
         codex_home,
         client_version,
         event_sink,
+        acp_port,
     )
     .await
 }
@@ -269,6 +271,7 @@ pub(crate) async fn send_user_message(
         .await;
     }
 
+    let event_sink = crate::event_sink::TauriEventSink::new(app.clone());
     codex_core::send_user_message_core(
         &state.sessions,
         workspace_id,
@@ -280,6 +283,7 @@ pub(crate) async fn send_user_message(
         images,
         app_mentions,
         collaboration_mode,
+        &event_sink,
     )
     .await
 }

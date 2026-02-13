@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tokio::process::Child;
@@ -67,6 +68,9 @@ pub(crate) struct AppState {
     pub(crate) codex_login_cancels: Mutex<HashMap<String, CodexLoginCancelState>>,
     pub(crate) orbit_runner: Mutex<OrbitRunnerRuntime>,
     pub(crate) tcp_daemon: Mutex<TcpDaemonRuntime>,
+    /// Monotonically increasing port counter for `opencode acp --port <N>`.
+    /// Each workspace session gets a unique port. Starts at 14096.
+    pub(crate) next_acp_port: AtomicU16,
 }
 
 impl AppState {
@@ -91,6 +95,7 @@ impl AppState {
             codex_login_cancels: Mutex::new(HashMap::new()),
             orbit_runner: Mutex::new(OrbitRunnerRuntime::default()),
             tcp_daemon: Mutex::new(TcpDaemonRuntime::default()),
+            next_acp_port: AtomicU16::new(14096),
         }
     }
 }

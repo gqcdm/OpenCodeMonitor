@@ -659,7 +659,7 @@ describe("SettingsView Codex overrides", () => {
       />,
     );
 
-    const input = screen.getByLabelText("Codex args override for Workspace");
+    const input = screen.getByLabelText("OpenCode args override for Workspace");
     fireEvent.change(input, { target: { value: "--profile dev" } });
     fireEvent.blur(input);
 

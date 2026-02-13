@@ -261,7 +261,7 @@ export const Sidebar = memo(function Sidebar({
     ? accountEmail
     : accountInfo?.type === "apikey"
       ? "API key"
-      : "Sign in to Codex";
+      : "Sign in to OpenCode";
   const accountActionLabel = accountEmail ? "Switch account" : "Sign in";
   const showAccountSwitcher = Boolean(activeWorkspaceId);
   const accountSwitchDisabled = accountSwitching || !activeWorkspaceId;

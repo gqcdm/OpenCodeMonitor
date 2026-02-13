@@ -177,9 +177,9 @@ export function Home({
   return (
     <div className="home">
       <div className="home-hero">
-        <div className="home-title">Codex Monitor</div>
+        <div className="home-title">OpenCode Monitor</div>
         <div className="home-subtitle">
-          Orchestrate agents across your local projects.
+          Orchestrate OpenCode agents across your local projects.
         </div>
       </div>
       <div className="home-latest">
