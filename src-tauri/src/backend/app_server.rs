@@ -62,6 +62,8 @@ pub(crate) struct WorkspaceSession {
     pub(crate) background_thread_callbacks: Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>,
     /// ACP → CodexMonitor event translation state (turn IDs, item IDs, tool-call mapping).
     pub(crate) translation_state: Mutex<SessionTranslationState>,
+    /// Cached ACP model payload from `session/new`/`session/load`.
+    pub(crate) models_cache: Mutex<Option<Value>>,
 }
 
 impl WorkspaceSession {
@@ -351,6 +353,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         next_id: AtomicU64::new(1),
         background_thread_callbacks: Mutex::new(HashMap::new()),
         translation_state: Mutex::new(SessionTranslationState::new(String::new())),
+        models_cache: Mutex::new(None),
     });
 
     let session_clone = Arc::clone(&session);

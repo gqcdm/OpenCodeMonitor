@@ -275,6 +275,19 @@ export function useModels({
   }, [isConnected, models.length, refreshModels, workspaceId]);
 
   useEffect(() => {
+    if (!workspaceId || !isConnected) {
+      return;
+    }
+    if (models.length > 0) {
+      return;
+    }
+    if (!selectionKey) {
+      return;
+    }
+    refreshModels();
+  }, [isConnected, models.length, refreshModels, selectionKey, workspaceId]);
+
+  useEffect(() => {
     if (!selectedModel) {
       return;
     }

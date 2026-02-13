@@ -57,6 +57,14 @@ async fn resolve_codex_home_for_workspace_core(
         .ok_or_else(|| "Unable to resolve CODEX_HOME".to_string())
 }
 
+fn response_payload(response: &Value) -> &Value {
+    response.get("result").unwrap_or(response)
+}
+
+fn extract_models_payload(response: &Value) -> Option<Value> {
+    response_payload(response).get("models").cloned()
+}
+
 pub(crate) async fn start_thread_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
@@ -79,6 +87,9 @@ pub(crate) async fn start_thread_core(
     if !session_id.is_empty() {
         let mut ts = session.translation_state.lock().await;
         ts.session_id = session_id.clone();
+    }
+    if let Some(models) = extract_models_payload(&response) {
+        *session.models_cache.lock().await = Some(models);
     }
     Ok(json!({
         "result": {
@@ -103,6 +114,9 @@ pub(crate) async fn resume_thread_core(
     {
         let mut ts = session.translation_state.lock().await;
         ts.session_id = thread_id.clone();
+    }
+    if let Some(models) = extract_models_payload(&_response) {
+        *session.models_cache.lock().await = Some(models);
     }
     Ok(json!({
         "result": {
@@ -203,7 +217,7 @@ pub(crate) async fn compact_thread_core(
     let session = get_session_clone(sessions, &workspace_id).await?;
     let params = json!({
         "sessionId": thread_id,
-        "parts": [{ "type": "text", "text": "/compact" }]
+        "prompt": [{ "type": "text", "text": "/compact" }]
     });
     session.send_request("session/prompt", params).await
 }
@@ -361,10 +375,7 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
         message: started_msg,
     });
 
-    let params = json!({
-        "sessionId": thread_id,
-        "parts": parts
-    });
+    let params = json!({ "sessionId": thread_id, "prompt": parts });
     let result = session.send_request("session/prompt", params).await;
 
     // Emit synthetic item/completed for agent message (if one was streamed).
@@ -385,7 +396,16 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
         message: completed_msg,
     });
 
-    result
+    let response = result?;
+    if response.get("error").is_some() {
+        return Ok(response);
+    }
+    let mut command_result = response_payload(&response)
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    command_result.insert("turn".to_string(), json!({ "id": turn_id }));
+    Ok(json!({ "result": Value::Object(command_result) }))
 }
 
 pub(crate) async fn turn_steer_core(
@@ -432,11 +452,57 @@ pub(crate) async fn start_review_core(
 }
 
 pub(crate) async fn model_list_core(
-    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    _workspace_id: String,
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
 ) -> Result<Value, String> {
-    // Models are returned in session/new response — no separate list call needed.
-    Ok(json!({ "result": { "data": [] } }))
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let models_payload = session.models_cache.lock().await.clone();
+    let Some(models_payload) = models_payload else {
+        return Ok(json!({ "result": { "data": [] } }));
+    };
+
+    let current_model = models_payload
+        .get("currentModelId")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let available_models = models_payload
+        .get("availableModels")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let data: Vec<Value> = available_models
+        .into_iter()
+        .filter_map(|entry| {
+            let model_id = entry
+                .get("modelId")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if model_id.is_empty() {
+                return None;
+            }
+            let display_name = entry
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or(&model_id)
+                .trim()
+                .to_string();
+
+            Some(json!({
+                "id": model_id.clone(),
+                "model": model_id.clone(),
+                "displayName": display_name,
+                "description": "",
+                "supportedReasoningEfforts": [],
+                "defaultReasoningEffort": null,
+                "isDefault": model_id == current_model,
+            }))
+        })
+        .collect();
+
+    Ok(json!({ "result": { "data": data } }))
 }
 
 pub(crate) async fn account_rate_limits_core(

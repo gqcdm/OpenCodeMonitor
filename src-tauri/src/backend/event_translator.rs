@@ -112,15 +112,23 @@ pub(crate) fn translate_acp_event(
         None => return vec![],
     };
 
-    let thread_id = state.session_id.clone();
+    let event_session_id = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if !event_session_id.is_empty() {
+        state.session_id = event_session_id.to_string();
+    }
+    let thread_id = if !event_session_id.is_empty() {
+        event_session_id.to_string()
+    } else {
+        state.session_id.clone()
+    };
     let turn_id = state.current_turn_id.clone();
 
     match update_type {
         "agent_message_chunk" => {
-            let text = update
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
+            let text = extract_chunk_text(update);
             if text.is_empty() {
                 return vec![];
             }
@@ -137,10 +145,7 @@ pub(crate) fn translate_acp_event(
         }
 
         "agent_thought_chunk" => {
-            let text = update
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
+            let text = extract_chunk_text(update);
             if text.is_empty() {
                 return vec![];
             }
@@ -432,6 +437,38 @@ fn extract_tool_output(update: &Value) -> String {
     parts.join("\n")
 }
 
+fn extract_chunk_text(update: &Value) -> String {
+    if let Some(text) = update.get("text").and_then(|v| v.as_str()) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    let content = match update.get("content") {
+        Some(content) => content,
+        None => return String::new(),
+    };
+
+    if let Some(text) = content.get("text").and_then(|v| v.as_str()) {
+        return text.trim().to_string();
+    }
+
+    if let Some(parts) = content.as_array() {
+        let mut text_parts = Vec::new();
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                if !text.is_empty() {
+                    text_parts.push(text);
+                }
+            }
+        }
+        return text_parts.join("");
+    }
+
+    String::new()
+}
+
 // ---------------------------------------------------------------------------
 // Permission / approval translation
 // ---------------------------------------------------------------------------
@@ -511,7 +548,10 @@ mod tests {
                 "sessionId": "ses_test123",
                 "update": {
                     "sessionUpdate": "agent_message_chunk",
-                    "text": "Hello world"
+                    "content": {
+                        "type": "text",
+                        "text": "Hello world"
+                    }
                 }
             }
         });
@@ -535,7 +575,10 @@ mod tests {
                 "sessionId": "ses_test123",
                 "update": {
                     "sessionUpdate": "agent_thought_chunk",
-                    "text": "Let me think..."
+                    "content": {
+                        "type": "text",
+                        "text": "Let me think..."
+                    }
                 }
             }
         });
