@@ -36,7 +36,14 @@ fn spawn_with_app(
     codex_home: Option<PathBuf>,
 ) -> impl std::future::Future<Output = Result<Arc<WorkspaceSession>, String>> {
     let port = state.next_acp_port.fetch_add(1, Ordering::SeqCst);
-    spawn_workspace_session(entry, default_bin, codex_args, app.clone(), codex_home, port)
+    spawn_workspace_session(
+        entry,
+        default_bin,
+        codex_args,
+        app.clone(),
+        codex_home,
+        port,
+    )
 }
 
 #[tauri::command]

@@ -83,7 +83,9 @@ async fn is_pid_running(pid: u32) -> bool {
         return false;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().any(|line| line.contains(&format!("\"{pid}\"")))
+    stdout
+        .lines()
+        .any(|line| line.contains(&format!("\"{pid}\"")))
 }
 
 #[cfg(not(any(unix, windows)))]

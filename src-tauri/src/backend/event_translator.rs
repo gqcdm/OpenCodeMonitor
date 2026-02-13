@@ -188,6 +188,28 @@ pub(crate) fn translate_acp_event(
             })]
         }
 
+        "plan" => {
+            let explanation = update
+                .get("explanation")
+                .cloned()
+                .or_else(|| update.get("text").cloned())
+                .unwrap_or(Value::Null);
+            let plan = update
+                .get("plan")
+                .cloned()
+                .or_else(|| update.get("steps").cloned())
+                .unwrap_or(Value::Null);
+            vec![json!({
+                "method": "turn/plan/updated",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "explanation": explanation,
+                    "plan": plan
+                }
+            })]
+        }
+
         // -----------------------------------------------------------------
         // Events we intentionally drop for MVP
         // -----------------------------------------------------------------
@@ -439,9 +461,8 @@ fn extract_tool_output(update: &Value) -> String {
 
 fn extract_chunk_text(update: &Value) -> String {
     if let Some(text) = update.get("text").and_then(|v| v.as_str()) {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
+        if !text.is_empty() {
+            return text.to_string();
         }
     }
 
@@ -451,7 +472,7 @@ fn extract_chunk_text(update: &Value) -> String {
     };
 
     if let Some(text) = content.get("text").and_then(|v| v.as_str()) {
-        return text.trim().to_string();
+        return text.to_string();
     }
 
     if let Some(parts) = content.as_array() {
@@ -672,6 +693,56 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "thread/tokenUsage/updated");
         assert_eq!(events[0]["params"]["tokenUsage"]["totalTokens"], 5000);
+    }
+
+    #[test]
+    fn plan_update_maps_to_turn_plan_updated() {
+        let mut state = make_state();
+        let notification = json!({
+            "method": "session/update",
+            "params": {
+                "sessionId": "ses_test123",
+                "update": {
+                    "sessionUpdate": "plan",
+                    "explanation": "Plan for implementation",
+                    "plan": [
+                        { "description": "Step 1", "status": "pending" }
+                    ]
+                }
+            }
+        });
+
+        let events = translate_acp_event(&notification, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "turn/plan/updated");
+        assert_eq!(events[0]["params"]["threadId"], "ses_test123");
+        assert_eq!(events[0]["params"]["turnId"], "turn_1");
+        assert_eq!(
+            events[0]["params"]["explanation"],
+            "Plan for implementation"
+        );
+        assert_eq!(events[0]["params"]["plan"][0]["description"], "Step 1");
+    }
+
+    #[test]
+    fn chunk_text_preserves_whitespace() {
+        let mut state = make_state();
+        let notification = json!({
+            "method": "session/update",
+            "params": {
+                "sessionId": "ses_test123",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": " line with trailing space "
+                    }
+                }
+            }
+        });
+
+        let events = translate_acp_event(&notification, &mut state);
+        assert_eq!(events[0]["params"]["delta"], " line with trailing space ");
     }
 
     #[test]

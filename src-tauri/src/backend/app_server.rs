@@ -12,9 +12,7 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::timeout;
 
-use crate::backend::event_translator::{
-    self, SessionTranslationState,
-};
+use crate::backend::event_translator::{self, SessionTranslationState};
 use crate::backend::events::{AppServerEvent, EventSink};
 use crate::codex::args::parse_codex_args;
 use crate::shared::process_core::{kill_child_process_tree, tokio_command};
@@ -64,6 +62,41 @@ pub(crate) struct WorkspaceSession {
     pub(crate) translation_state: Mutex<SessionTranslationState>,
     /// Cached ACP model payload from `session/new`/`session/load`.
     pub(crate) models_cache: Mutex<Option<Value>>,
+    /// One in-flight `session/prompt` at a time per workspace session.
+    pub(crate) prompt_lock: Mutex<()>,
+    /// Capability state for best-effort model switching.
+    pub(crate) model_set_capability: Mutex<ModelSetCapability>,
+    /// Emit model-set warning only once per workspace session.
+    pub(crate) model_set_warning_emitted: Mutex<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModelSetMethod {
+    UnstableSetSessionModelId,
+    UnstableSetSessionModel,
+    SessionSetModelId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModelSetCapability {
+    Unknown,
+    Supported(ModelSetMethod),
+    Unsupported,
+}
+
+async fn route_translated_event_to_background_callback(
+    callbacks: &Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>,
+    translated_message: &Value,
+) -> bool {
+    let Some(thread_id) = extract_thread_id(translated_message) else {
+        return false;
+    };
+    let callbacks = callbacks.lock().await;
+    if let Some(tx) = callbacks.get(&thread_id) {
+        let _ = tx.send(translated_message.clone());
+        return true;
+    }
+    false
 }
 
 impl WorkspaceSession {
@@ -354,6 +387,9 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         background_thread_callbacks: Mutex::new(HashMap::new()),
         translation_state: Mutex::new(SessionTranslationState::new(String::new())),
         models_cache: Mutex::new(None),
+        prompt_lock: Mutex::new(()),
+        model_set_capability: Mutex::new(ModelSetCapability::Unknown),
+        model_set_warning_emitted: Mutex::new(false),
     });
 
     let session_clone = Arc::clone(&session);
@@ -381,7 +417,10 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
             };
 
             let maybe_id = value.get("id").and_then(|id| id.as_u64());
-            let method = value.get("method").and_then(|m| m.as_str()).map(String::from);
+            let method = value
+                .get("method")
+                .and_then(|m| m.as_str())
+                .map(String::from);
             let has_result_or_error = value.get("result").is_some() || value.get("error").is_some();
 
             if let Some(id) = maybe_id {
@@ -394,7 +433,12 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
                     // JSON-RPC request FROM ACP (has id + method) — e.g. requestPermission.
                     if m == "requestPermission" {
                         let session_id = {
-                            session_clone.translation_state.lock().await.session_id.clone()
+                            session_clone
+                                .translation_state
+                                .lock()
+                                .await
+                                .session_id
+                                .clone()
                         };
                         if let Some(translated) =
                             event_translator::translate_permission_request(&value, &session_id)
@@ -425,11 +469,18 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
                         event_translator::translate_acp_event(&value, &mut ts)
                     };
                     for msg in translated {
-                        let payload = AppServerEvent {
-                            workspace_id: workspace_id.clone(),
-                            message: msg,
-                        };
-                        event_sink_clone.emit_app_server_event(payload);
+                        let sent_to_background = route_translated_event_to_background_callback(
+                            &session_clone.background_thread_callbacks,
+                            &msg,
+                        )
+                        .await;
+                        if !sent_to_background {
+                            let payload = AppServerEvent {
+                                workspace_id: workspace_id.clone(),
+                                message: msg,
+                            };
+                            event_sink_clone.emit_app_server_event(payload);
+                        }
                     }
                 } else {
                     // Non-sessionUpdate notification — check background callbacks or forward.
@@ -518,8 +569,13 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_initialize_params, extract_thread_id};
-    use serde_json::json;
+    use super::{
+        build_initialize_params, extract_thread_id, route_translated_event_to_background_callback,
+    };
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+    use tokio::runtime::Builder;
+    use tokio::sync::{mpsc, Mutex};
 
     #[test]
     fn extract_thread_id_reads_camel_case() {
@@ -548,5 +604,51 @@ mod tests {
                 .and_then(|value| value.as_u64()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn routed_translated_event_goes_to_background_callback() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let callbacks = Mutex::new(HashMap::from([("ses_bg".to_string(), tx)]));
+            let event = json!({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": "ses_bg",
+                    "delta": "hello"
+                }
+            });
+
+            let routed = route_translated_event_to_background_callback(&callbacks, &event).await;
+            assert!(routed);
+            let received = rx.recv().await.expect("background callback event");
+            assert_eq!(received["method"], "item/agentMessage/delta");
+            assert_eq!(received["params"]["threadId"], "ses_bg");
+        });
+    }
+
+    #[test]
+    fn untranslated_event_without_callback_falls_back_to_sink_path() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let callbacks = Mutex::new(HashMap::<String, mpsc::UnboundedSender<Value>>::new());
+            let event = json!({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": "ses_fg",
+                    "delta": "hello"
+                }
+            });
+
+            let routed = route_translated_event_to_background_callback(&callbacks, &event).await;
+            assert!(!routed);
+        });
     }
 }

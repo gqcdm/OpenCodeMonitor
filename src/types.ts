@@ -8,6 +8,7 @@ export type WorkspaceSettings = {
   launchScript?: string | null;
   launchScripts?: LaunchScriptEntry[] | null;
   worktreeSetupScript?: string | null;
+  hiddenSessionIds?: string[];
 };
 
 export type LaunchScriptIconId =

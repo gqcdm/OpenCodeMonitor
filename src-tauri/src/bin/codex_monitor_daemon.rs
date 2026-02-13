@@ -666,7 +666,15 @@ impl DaemonState {
         limit: Option<u32>,
         sort_key: Option<String>,
     ) -> Result<Value, String> {
-        codex_core::list_threads_core(&self.sessions, workspace_id, cursor, limit, sort_key).await
+        codex_core::list_threads_core(
+            &self.sessions,
+            &self.workspaces,
+            workspace_id,
+            cursor,
+            limit,
+            sort_key,
+        )
+        .await
     }
 
     async fn list_mcp_server_status(
@@ -1140,6 +1148,8 @@ impl DaemonState {
         };
         codex_aux_core::generate_commit_message_core(
             &self.sessions,
+            &self.workspaces,
+            &self.storage_path,
             workspace_id,
             &diff,
             &commit_message_prompt,
@@ -1157,6 +1167,8 @@ impl DaemonState {
     ) -> Result<Value, String> {
         codex_aux_core::generate_run_metadata_core(
             &self.sessions,
+            &self.workspaces,
+            &self.storage_path,
             workspace_id,
             &prompt,
             |workspace_id, thread_id| {

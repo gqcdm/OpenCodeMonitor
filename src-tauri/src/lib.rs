@@ -81,9 +81,7 @@ pub fn run() {
             .unwrap_or(false)
             || std::env::var_os("WAYLAND_DISPLAY").is_some();
         let has_nvidia = std::path::Path::new("/proc/driver/nvidia/version").exists();
-        if is_wayland
-            && has_nvidia
-            && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+        if is_wayland && has_nvidia && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
         {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }

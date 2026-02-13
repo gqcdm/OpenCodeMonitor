@@ -408,6 +408,8 @@ pub(crate) struct WorkspaceSettings {
     pub(crate) launch_scripts: Option<Vec<LaunchScriptEntry>>,
     #[serde(default, rename = "worktreeSetupScript")]
     pub(crate) worktree_setup_script: Option<String>,
+    #[serde(default, rename = "hiddenSessionIds")]
+    pub(crate) hidden_session_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -586,10 +588,7 @@ pub(crate) struct AppSettings {
         rename = "notificationSoundsEnabled"
     )]
     pub(crate) notification_sounds_enabled: bool,
-    #[serde(
-        default = "default_split_chat_diff_view",
-        rename = "splitChatDiffView"
-    )]
+    #[serde(default = "default_split_chat_diff_view", rename = "splitChatDiffView")]
     pub(crate) split_chat_diff_view: bool,
     #[serde(default = "default_preload_git_diffs", rename = "preloadGitDiffs")]
     pub(crate) preload_git_diffs: bool,

@@ -58,6 +58,7 @@ fn workspace_with_id_and_kind(
             launch_script: None,
             launch_scripts: None,
             worktree_setup_script: None,
+            hidden_session_ids: vec![],
         },
     }
 }

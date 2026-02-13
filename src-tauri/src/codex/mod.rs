@@ -142,7 +142,15 @@ pub(crate) async fn list_threads(
         .await;
     }
 
-    codex_core::list_threads_core(&state.sessions, workspace_id, cursor, limit, sort_key).await
+    codex_core::list_threads_core(
+        &state.sessions,
+        &state.workspaces,
+        workspace_id,
+        cursor,
+        limit,
+        sort_key,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -620,6 +628,8 @@ pub(crate) async fn generate_commit_message(
     };
     crate::shared::codex_aux_core::generate_commit_message_core(
         &state.sessions,
+        &state.workspaces,
+        &state.storage_path,
         workspace_id,
         &diff,
         &commit_message_prompt,
@@ -661,6 +671,8 @@ pub(crate) async fn generate_run_metadata(
 
     crate::shared::codex_aux_core::generate_run_metadata_core(
         &state.sessions,
+        &state.workspaces,
+        &state.storage_path,
         workspace_id,
         &prompt,
         |workspace_id, thread_id| {
