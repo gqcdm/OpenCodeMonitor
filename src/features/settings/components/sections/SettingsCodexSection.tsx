@@ -266,7 +266,7 @@ export function SettingsCodexSection({
             id="codex-path"
             className="settings-input"
             value={codexPathDraft}
-            placeholder="codex"
+            placeholder="opencode"
             onChange={(event) => onSetCodexPathDraft(event.target.value)}
           />
           <button
@@ -307,7 +307,7 @@ export function SettingsCodexSection({
           </button>
         </div>
         <div className="settings-help">
-          Extra flags passed before <code>app-server</code>. Use quotes for values with spaces.
+          Extra flags passed before <code>acp</code>. Use quotes for values with spaces.
         </div>
         <div className="settings-field-actions">
           {codexDirty && (
@@ -354,7 +354,7 @@ export function SettingsCodexSection({
             </div>
             <div className="settings-doctor-body">
               <div>Version: {doctorState.result.version ?? "unknown"}</div>
-              <div>App-server: {doctorState.result.appServerOk ? "ok" : "failed"}</div>
+              <div>ACP command: {doctorState.result.appServerOk ? "ok" : "failed"}</div>
               <div>
                 Node:{" "}
                 {doctorState.result.nodeOk
@@ -583,7 +583,7 @@ export function SettingsCodexSection({
         onSave={onSaveGlobalConfig}
         helpText={
           <>
-            Stored at <code>~/.codex/config.toml</code>.
+            Stored at <code>~/.config/opencode/config.toml</code>.
           </>
         }
         classNames={{

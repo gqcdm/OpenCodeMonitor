@@ -6,7 +6,7 @@ Forked from [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by Dimilli
 
 ## Status
 
-**Work in Progress** — Phase 1 (fork & rename) complete. Backend protocol adaptation in progress.
+**Active development** — ACP backend migration is live for thread/session lifecycle, event translation, and model discovery. Remaining work focuses on parity polish and UX cleanup.
 
 ## Architecture
 
