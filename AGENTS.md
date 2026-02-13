@@ -102,7 +102,7 @@ Use project aliases for frontend imports:
 - ACP process spawn: `src-tauri/src/backend/app_server.rs`
 - Threads reducer entrypoint: `src/features/threads/hooks/useThreadsReducer.ts`
 - Threads reducer slices: `src/features/threads/hooks/threadReducer/*`
-- Spec with wire captures: `../opencode-monitor-spec.md`
+- Spec with wire captures: `opencode-monitor-spec.md`
 
 For broader path maps, use `docs/codebase-map.md`.
 
@@ -185,4 +185,4 @@ Use extra care in high-churn/high-complexity files:
 
 - Task-oriented code map: `docs/codebase-map.md`
 - Setup/build/release/test commands: `README.md`
-- ACP protocol spec and wire captures: `../opencode-monitor-spec.md`
+- ACP protocol spec and wire captures: `opencode-monitor-spec.md`

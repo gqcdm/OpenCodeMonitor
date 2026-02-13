@@ -25,6 +25,10 @@ pub(crate) struct SessionTranslationState {
     agent_message_item_id: Option<String>,
     /// Stable item ID for the current reasoning stream.
     reasoning_item_id: Option<String>,
+    /// Stable item ID for contiguous user-message chunk streams.
+    user_message_item_id: Option<String>,
+    /// Buffered text for contiguous user-message chunk streams.
+    user_message_text: String,
 }
 
 impl SessionTranslationState {
@@ -36,6 +40,8 @@ impl SessionTranslationState {
             tool_call_items: HashMap::new(),
             agent_message_item_id: None,
             reasoning_item_id: None,
+            user_message_item_id: None,
+            user_message_text: String::new(),
         }
     }
 
@@ -51,6 +57,19 @@ impl SessionTranslationState {
         self.tool_call_items.clear();
         self.agent_message_item_id = None;
         self.reasoning_item_id = None;
+        self.user_message_item_id = None;
+        self.user_message_text.clear();
+    }
+
+    /// Prepare translation state for replaying historical session updates.
+    pub(crate) fn prepare_replay(&mut self, session_id: String) {
+        self.session_id = session_id;
+        self.current_turn_id.clear();
+        self.tool_call_items.clear();
+        self.agent_message_item_id = None;
+        self.reasoning_item_id = None;
+        self.user_message_item_id = None;
+        self.user_message_text.clear();
     }
 
     /// Get or create the stable item-id for the agent message stream within
@@ -75,6 +94,25 @@ impl SessionTranslationState {
             self.reasoning_item_id = Some(id.clone());
             id
         }
+    }
+
+    fn user_message_item(&mut self) -> String {
+        if let Some(ref id) = self.user_message_item_id {
+            id.clone()
+        } else {
+            let id = self.next_item_id();
+            self.user_message_item_id = Some(id.clone());
+            id
+        }
+    }
+
+    fn mark_new_replayed_user_message_boundary(&mut self) {
+        // ACP replay has no turn lifecycle markers. Treat each replayed user
+        // message as a boundary so assistant/reasoning streams do not merge
+        // across historical turns.
+        self.tool_call_items.clear();
+        self.agent_message_item_id = None;
+        self.reasoning_item_id = None;
     }
 }
 
@@ -126,7 +164,45 @@ pub(crate) fn translate_acp_event(
     };
     let turn_id = state.current_turn_id.clone();
 
+    if update_type != "user_message_chunk" {
+        state.user_message_item_id = None;
+        state.user_message_text.clear();
+    }
+
     match update_type {
+        "user_message_chunk" => {
+            // Foreground sends emit synthetic user items before session/prompt.
+            // Translate ACP user chunks only for replay to avoid duplicates.
+            if !state.current_turn_id.is_empty() {
+                return vec![];
+            }
+            let text = extract_chunk_text(update);
+            if text.is_empty() {
+                return vec![];
+            }
+            if state.user_message_item_id.is_none() {
+                state.mark_new_replayed_user_message_boundary();
+            }
+            let item_id = state.user_message_item();
+            state.user_message_text.push_str(&text);
+            vec![json!({
+                "method": "item/completed",
+                "params": {
+                    "threadId": thread_id,
+                    "item": {
+                        "id": item_id,
+                        "type": "userMessage",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": state.user_message_text
+                            }
+                        ]
+                    }
+                }
+            })]
+        }
+
         "agent_message_chunk" => {
             let text = extract_chunk_text(update);
             if text.is_empty() {
@@ -164,8 +240,8 @@ pub(crate) fn translate_acp_event(
         // -----------------------------------------------------------------
         // Tool call lifecycle: pending → in_progress → completed|failed
         // -----------------------------------------------------------------
-        "tool_call" => translate_tool_call(update, state),
-        "tool_call_update" => translate_tool_call_update(update, state),
+        "tool_call" => translate_tool_call(update, state, &thread_id),
+        "tool_call_update" => translate_tool_call_update(update, state, &thread_id),
 
         // -----------------------------------------------------------------
         // Usage / token tracking
@@ -179,10 +255,21 @@ pub(crate) fn translate_acp_event(
                 "params": {
                     "threadId": thread_id,
                     "tokenUsage": {
-                        "totalTokens": used,
-                        "inputTokens": used,
-                        "outputTokens": 0,
-                        "contextWindowSize": size
+                        "total": {
+                            "totalTokens": used,
+                            "inputTokens": used,
+                            "cachedInputTokens": 0,
+                            "outputTokens": 0,
+                            "reasoningOutputTokens": 0
+                        },
+                        "last": {
+                            "totalTokens": used,
+                            "inputTokens": used,
+                            "cachedInputTokens": 0,
+                            "outputTokens": 0,
+                            "reasoningOutputTokens": 0
+                        },
+                        "modelContextWindow": size
                     }
                 }
             })]
@@ -213,7 +300,7 @@ pub(crate) fn translate_acp_event(
         // -----------------------------------------------------------------
         // Events we intentionally drop for MVP
         // -----------------------------------------------------------------
-        "user_message_chunk" | "available_commands_update" => vec![],
+        "available_commands_update" => vec![],
 
         // Unknown event type — drop silently but log in debug builds.
         other => {
@@ -285,7 +372,176 @@ fn tool_kind_to_item_type(kind: &str) -> &str {
     }
 }
 
-fn translate_tool_call(update: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+fn command_parts_from_raw_input(raw_input: &Value, fallback_title: &str) -> Vec<String> {
+    if let Some(command) = raw_input.get("command") {
+        if let Some(parts) = command.as_array() {
+            let values: Vec<String> = parts
+                .iter()
+                .filter_map(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+            if !values.is_empty() {
+                return values;
+            }
+        }
+        if let Some(text) = command.as_str() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return vec![trimmed.to_string()];
+            }
+        }
+    }
+    let fallback = fallback_title.trim();
+    if fallback.is_empty() {
+        Vec::new()
+    } else {
+        vec![fallback.to_string()]
+    }
+}
+
+fn cwd_from_raw_input(raw_input: &Value) -> String {
+    ["workdir", "cwd", "path"]
+        .iter()
+        .find_map(|key| raw_input.get(key).and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_default()
+}
+
+fn file_path_from_raw_input(raw_input: &Value) -> Option<String> {
+    ["filePath", "path"]
+        .iter()
+        .find_map(|key| raw_input.get(key).and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn parse_file_changes_from_content(update: &Value) -> Vec<Value> {
+    let content = match update.get("content").and_then(|value| value.as_array()) {
+        Some(content) => content,
+        None => return Vec::new(),
+    };
+    content
+        .iter()
+        .filter(|entry| entry.get("type").and_then(|value| value.as_str()) == Some("diff"))
+        .filter_map(|entry| {
+            let path = entry.get("path").and_then(|value| value.as_str())?.trim();
+            if path.is_empty() {
+                return None;
+            }
+            let old_text = entry
+                .get("oldText")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let new_text = entry
+                .get("newText")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let kind = if old_text.is_empty() && !new_text.is_empty() {
+                "add"
+            } else if !old_text.is_empty() && new_text.is_empty() {
+                "delete"
+            } else {
+                "modify"
+            };
+            let diff = if old_text.is_empty() && new_text.is_empty() {
+                None
+            } else {
+                let mut lines = Vec::new();
+                lines.push(format!("--- {path}"));
+                lines.push(format!("+++ {path}"));
+                for line in old_text.lines() {
+                    lines.push(format!("-{line}"));
+                }
+                for line in new_text.lines() {
+                    lines.push(format!("+{line}"));
+                }
+                Some(lines.join("\n"))
+            };
+            Some(json!({
+                "path": path,
+                "kind": kind,
+                "diff": diff
+            }))
+        })
+        .collect()
+}
+
+fn build_tool_item(
+    item_id: &str,
+    item_type: &str,
+    title: &str,
+    status: &str,
+    raw_input: Option<&Value>,
+    output: Option<&str>,
+    changes_from_content: Option<Vec<Value>>,
+) -> Value {
+    let mut item = json!({
+        "id": item_id,
+        "type": item_type,
+        "status": status
+    });
+
+    if item_type == "commandExecution" {
+        let command_parts = raw_input
+            .map(|input| command_parts_from_raw_input(input, title))
+            .unwrap_or_else(|| {
+                let trimmed = title.trim();
+                if trimmed.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![trimmed.to_string()]
+                }
+            });
+        if !command_parts.is_empty() {
+            item["command"] = json!(command_parts);
+        }
+        if let Some(input) = raw_input {
+            let cwd = cwd_from_raw_input(input);
+            if !cwd.is_empty() {
+                item["cwd"] = json!(cwd);
+            }
+        }
+        if let Some(output_text) = output {
+            if !output_text.trim().is_empty() {
+                item["aggregatedOutput"] = json!(output_text);
+            }
+        }
+        return item;
+    }
+
+    if item_type == "fileChange" {
+        let mut changes = changes_from_content.unwrap_or_default();
+        if changes.is_empty() {
+            if let Some(input) = raw_input {
+                if let Some(path) = file_path_from_raw_input(input) {
+                    changes.push(json!({ "path": path, "kind": "modify" }));
+                }
+            }
+        }
+        if !changes.is_empty() {
+            item["changes"] = json!(changes);
+        }
+        if let Some(output_text) = output {
+            if !output_text.trim().is_empty() {
+                item["output"] = json!(output_text);
+            }
+        }
+        return item;
+    }
+
+    item
+}
+
+fn translate_tool_call(
+    update: &Value,
+    state: &mut SessionTranslationState,
+    thread_id: &str,
+) -> Vec<Value> {
     let tool_call_id = update
         .get("toolCallId")
         .and_then(|v| v.as_str())
@@ -313,16 +569,12 @@ fn translate_tool_call(update: &Value, state: &mut SessionTranslationState) -> V
 
     if status == "pending" {
         // Emit item/started
+        let item = build_tool_item(&item_id, item_type, title, "in_progress", None, None, None);
         vec![json!({
             "method": "item/started",
             "params": {
-                "threadId": state.session_id,
-                "item": {
-                    "id": item_id,
-                    "type": item_type,
-                    "title": title,
-                    "status": "in_progress"
-                }
+                "threadId": thread_id,
+                "item": item
             }
         })]
     } else {
@@ -330,7 +582,11 @@ fn translate_tool_call(update: &Value, state: &mut SessionTranslationState) -> V
     }
 }
 
-fn translate_tool_call_update(update: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+fn translate_tool_call_update(
+    update: &Value,
+    state: &mut SessionTranslationState,
+    thread_id: &str,
+) -> Vec<Value> {
     let tool_call_id = update
         .get("toolCallId")
         .and_then(|v| v.as_str())
@@ -363,8 +619,25 @@ fn translate_tool_call_update(update: &Value, state: &mut SessionTranslationStat
 
     match status {
         "in_progress" => {
-            // Emit output delta if there's rawInput to show.
             let raw_input = update.get("rawInput");
+            let started_item = build_tool_item(
+                &item_id,
+                item_type,
+                title,
+                "in_progress",
+                raw_input,
+                None,
+                None,
+            );
+            events.push(json!({
+                "method": "item/started",
+                "params": {
+                    "threadId": thread_id,
+                    "item": started_item
+                }
+            }));
+
+            // Emit output delta if there's rawInput to show.
             if let Some(input) = raw_input {
                 let delta_text = serde_json::to_string_pretty(input).unwrap_or_default();
                 if !delta_text.is_empty() {
@@ -376,7 +649,7 @@ fn translate_tool_call_update(update: &Value, state: &mut SessionTranslationStat
                     events.push(json!({
                         "method": method,
                         "params": {
-                            "threadId": state.session_id,
+                            "threadId": thread_id,
                             "itemId": item_id,
                             "delta": delta_text
                         }
@@ -387,33 +660,39 @@ fn translate_tool_call_update(update: &Value, state: &mut SessionTranslationStat
         "completed" => {
             // Extract output text from content array.
             let output_text = extract_tool_output(update);
+            let item = build_tool_item(
+                &item_id,
+                item_type,
+                title,
+                "completed",
+                update.get("rawInput"),
+                Some(&output_text),
+                Some(parse_file_changes_from_content(update)),
+            );
             events.push(json!({
                 "method": "item/completed",
                 "params": {
-                    "threadId": state.session_id,
-                    "item": {
-                        "id": item_id,
-                        "type": item_type,
-                        "title": title,
-                        "status": "completed",
-                        "output": output_text
-                    }
+                    "threadId": thread_id,
+                    "item": item
                 }
             }));
         }
         "failed" => {
             let error_text = extract_tool_output(update);
+            let item = build_tool_item(
+                &item_id,
+                item_type,
+                title,
+                "failed",
+                update.get("rawInput"),
+                Some(&error_text),
+                Some(parse_file_changes_from_content(update)),
+            );
             events.push(json!({
                 "method": "item/completed",
                 "params": {
-                    "threadId": state.session_id,
-                    "item": {
-                        "id": item_id,
-                        "type": item_type,
-                        "title": title,
-                        "status": "failed",
-                        "output": error_text
-                    }
+                    "threadId": thread_id,
+                    "item": item
                 }
             }));
         }
@@ -629,7 +908,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "item/started");
         assert_eq!(events[0]["params"]["item"]["type"], "commandExecution");
-        assert_eq!(events[0]["params"]["item"]["title"], "read");
+        assert_eq!(events[0]["params"]["item"]["command"][0], "read");
     }
 
     #[test]
@@ -692,7 +971,40 @@ mod tests {
         let events = translate_acp_event(&notification, &mut state);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "thread/tokenUsage/updated");
-        assert_eq!(events[0]["params"]["tokenUsage"]["totalTokens"], 5000);
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["total"]["totalTokens"],
+            5000
+        );
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["modelContextWindow"],
+            200000
+        );
+    }
+
+    #[test]
+    fn user_message_chunk_produces_user_message_item_in_replay_mode() {
+        let mut state = SessionTranslationState::new("ses_test123".into());
+        // Replay mode has no active synthetic turn id.
+        state.prepare_replay("ses_test123".into());
+        let notification = json!({
+            "method": "session/update",
+            "params": {
+                "sessionId": "ses_test123",
+                "update": {
+                    "sessionUpdate": "user_message_chunk",
+                    "text": "Read the file"
+                }
+            }
+        });
+
+        let events = translate_acp_event(&notification, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/completed");
+        assert_eq!(events[0]["params"]["item"]["type"], "userMessage");
+        assert_eq!(
+            events[0]["params"]["item"]["content"][0]["text"],
+            "Read the file"
+        );
     }
 
     #[test]

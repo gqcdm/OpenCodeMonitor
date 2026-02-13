@@ -153,7 +153,7 @@ pub(crate) async fn resume_thread_core(
     // session/load replays history as sessionUpdate events (handled by stdout reader).
     {
         let mut ts = session.translation_state.lock().await;
-        ts.session_id = thread_id.clone();
+        ts.prepare_replay(thread_id.clone());
     }
     if let Some(models) = extract_models_payload(&_response) {
         *session.models_cache.lock().await = Some(models);
@@ -221,6 +221,7 @@ pub(crate) async fn list_threads_core(
                 "id": id,
                 "cwd": cwd,
                 "name": title,
+                "preview": title,
                 "updatedAt": updated_at,
                 "createdAt": updated_at
             }))
@@ -894,6 +895,8 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
     event_sink: &E,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
+    let user_text = text.trim().to_string();
+    let user_images = images.clone().unwrap_or_default();
     let parts = build_acp_prompt_parts(text, images, app_mentions).await?;
     let _prompt_guard = session.prompt_lock.lock().await;
 
@@ -911,6 +914,36 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
         workspace_id: workspace_id.clone(),
         message: started_msg,
     });
+
+    if !user_text.is_empty() || !user_images.is_empty() {
+        let mut content_parts: Vec<Value> = Vec::new();
+        if !user_text.is_empty() {
+            content_parts.push(json!({ "type": "text", "text": user_text }));
+        }
+        for image in user_images {
+            let trimmed = image.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            content_parts.push(json!({ "type": "image", "value": trimmed }));
+        }
+        if !content_parts.is_empty() {
+            event_sink.emit_app_server_event(AppServerEvent {
+                workspace_id: workspace_id.clone(),
+                message: json!({
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": thread_id,
+                        "item": {
+                            "id": format!("item_user_{turn_id}"),
+                            "type": "userMessage",
+                            "content": content_parts
+                        }
+                    }
+                }),
+            });
+        }
+    }
 
     maybe_apply_requested_model(
         &session,

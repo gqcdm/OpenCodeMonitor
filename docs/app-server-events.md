@@ -51,7 +51,8 @@ Current `session/update` mappings in `event_translator.rs`:
 - `tool_call_update` -> tool deltas + `item/completed`
 - `usage_update` -> `thread/tokenUsage/updated`
 - `plan` -> `turn/plan/updated`
-- dropped intentionally: `user_message_chunk`, `available_commands_update`
+- `user_message_chunk` -> `item/completed` (`userMessage`) during replay (live sends use synthetic user items)
+- dropped intentionally: `available_commands_update`
 
 Unknown ACP `sessionUpdate` values are ignored (debug builds log them to stderr).
 

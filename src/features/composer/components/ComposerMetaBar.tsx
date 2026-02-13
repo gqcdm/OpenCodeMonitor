@@ -47,6 +47,10 @@ export function ComposerMetaBar({
             Math.min(Math.max((usedTokens / contextWindow) * 100, 0), 100),
         )
       : null;
+  const contextLabel =
+    contextFreePercent === null
+      ? "Context free --"
+      : `Context free ${Math.round(contextFreePercent)}%`;
   const planMode =
     collaborationModes.find((mode) => mode.id === "plan") ?? null;
   const defaultMode =
@@ -226,16 +230,8 @@ export function ComposerMetaBar({
       <div className="composer-context">
         <div
           className="composer-context-ring"
-          data-tooltip={
-            contextFreePercent === null
-              ? "Context free --"
-              : `Context free ${Math.round(contextFreePercent)}%`
-          }
-          aria-label={
-            contextFreePercent === null
-              ? "Context free --"
-              : `Context free ${Math.round(contextFreePercent)}%`
-          }
+          data-tooltip={contextLabel}
+          aria-label={contextLabel}
           style={
             {
               "--context-free": contextFreePercent ?? 0,
@@ -244,6 +240,7 @@ export function ComposerMetaBar({
         >
           <span className="composer-context-value">●</span>
         </div>
+        <span className="composer-context-label">{contextLabel}</span>
       </div>
     </div>
   );

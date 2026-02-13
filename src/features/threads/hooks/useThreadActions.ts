@@ -519,14 +519,16 @@ export function useThreadActions({
           .map((thread, index) => {
             const id = String(thread?.id ?? "");
             const preview = asString(thread?.preview ?? "").trim();
+            const explicitName = asString(thread?.name ?? thread?.title ?? "").trim();
+            const nameSeed = preview || explicitName;
             const customName = getCustomName(workspace.id, id);
             const fallbackName = `Agent ${index + 1}`;
             const name = customName
               ? customName
-              : preview.length > 0
-                ? preview.length > 38
-                  ? `${preview.slice(0, 38)}…`
-                  : preview
+              : nameSeed.length > 0
+                ? nameSeed.length > 38
+                  ? `${nameSeed.slice(0, 38)}…`
+                  : nameSeed
                 : fallbackName;
             return {
               id,
@@ -549,13 +551,15 @@ export function useThreadActions({
         uniqueThreads.forEach((thread) => {
           const threadId = String(thread?.id ?? "");
           const preview = asString(thread?.preview ?? "").trim();
-          if (!threadId || !preview) {
+          const explicitName = asString(thread?.name ?? thread?.title ?? "").trim();
+          const message = preview || explicitName;
+          if (!threadId || !message) {
             return;
           }
           dispatch({
             type: "setLastAgentMessage",
             threadId,
-            text: preview,
+            text: message,
             timestamp: getThreadTimestamp(thread),
           });
         });
@@ -662,14 +666,16 @@ export function useThreadActions({
             updateThreadParent(sourceParentId, [id]);
           }
           const preview = asString(thread?.preview ?? "").trim();
+          const explicitName = asString(thread?.name ?? thread?.title ?? "").trim();
+          const nameSeed = preview || explicitName;
           const customName = getCustomName(workspace.id, id);
           const fallbackName = `Agent ${existing.length + additions.length + 1}`;
           const name = customName
             ? customName
-            : preview.length > 0
-              ? preview.length > 38
-                ? `${preview.slice(0, 38)}…`
-                : preview
+            : nameSeed.length > 0
+              ? nameSeed.length > 38
+                ? `${nameSeed.slice(0, 38)}…`
+                : nameSeed
               : fallbackName;
           additions.push({ id, name, updatedAt: getThreadTimestamp(thread) });
           existingIds.add(id);
@@ -691,13 +697,15 @@ export function useThreadActions({
         matchingThreads.forEach((thread) => {
           const threadId = String(thread?.id ?? "");
           const preview = asString(thread?.preview ?? "").trim();
-          if (!threadId || !preview) {
+          const explicitName = asString(thread?.name ?? thread?.title ?? "").trim();
+          const message = preview || explicitName;
+          if (!threadId || !message) {
             return;
           }
           dispatch({
             type: "setLastAgentMessage",
             threadId,
-            text: preview,
+            text: message,
             timestamp: getThreadTimestamp(thread),
           });
         });
