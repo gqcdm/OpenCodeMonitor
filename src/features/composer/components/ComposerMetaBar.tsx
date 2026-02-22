@@ -4,6 +4,7 @@ import type { AccessMode, ThreadTokenUsage } from "../../../types";
 
 type ComposerMetaBarProps = {
   disabled: boolean;
+  isConnected?: boolean;
   collaborationModes: { id: string; label: string }[];
   selectedCollaborationModeId: string | null;
   onSelectCollaborationMode: (id: string | null) => void;
@@ -21,6 +22,7 @@ type ComposerMetaBarProps = {
 
 export function ComposerMetaBar({
   disabled,
+  isConnected = false,
   collaborationModes,
   selectedCollaborationModeId,
   onSelectCollaborationMode,
@@ -167,7 +169,9 @@ export function ComposerMetaBar({
             onChange={(event) => onSelectModel(event.target.value)}
             disabled={disabled}
           >
-            {models.length === 0 && <option value="">No models</option>}
+            {models.length === 0 && (
+              <option value="">{isConnected ? "Loading models..." : "No models"}</option>
+            )}
             {models.map((model) => (
               <option key={model.id} value={model.id}>
                 {model.displayName || model.model}

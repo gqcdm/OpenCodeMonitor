@@ -8,6 +8,7 @@ export const SUPPORTED_APP_SERVER_METHODS = [
   "codex/backgroundThread",
   "codex/connected",
   "codex/disconnected",
+  "codex/modelsReady",
   "codex/event/skills_update_available",
   "error",
   "item/agentMessage/delta",

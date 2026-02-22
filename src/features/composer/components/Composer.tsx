@@ -50,6 +50,7 @@ type ComposerProps = {
   onStop: () => void;
   canStop: boolean;
   disabled?: boolean;
+  isConnected?: boolean;
   appsEnabled: boolean;
   isProcessing: boolean;
   steerEnabled: boolean;
@@ -153,6 +154,7 @@ export const Composer = memo(function Composer({
   onStop,
   canStop,
   disabled = false,
+  isConnected = false,
   appsEnabled,
   isProcessing,
   steerEnabled,
@@ -815,6 +817,7 @@ export const Composer = memo(function Composer({
       />
       <ComposerMetaBar
         disabled={disabled}
+        isConnected={isConnected}
         collaborationModes={collaborationModes}
         selectedCollaborationModeId={selectedCollaborationModeId}
         onSelectCollaborationMode={onSelectCollaborationMode}

@@ -123,6 +123,7 @@ export function buildPrimaryNodes(options: LayoutNodesOptions): PrimaryLayoutNod
       onStop={options.onStop}
       canStop={options.canStop}
       disabled={options.isReviewing}
+      isConnected={options.activeWorkspace?.connected ?? false}
       onFileAutocompleteActiveChange={options.onFileAutocompleteActiveChange}
       contextUsage={options.activeTokenUsage}
       queuedMessages={options.activeQueue}

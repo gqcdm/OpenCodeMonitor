@@ -62,6 +62,9 @@ pub(crate) struct WorkspaceSession {
     pub(crate) translation_state: Mutex<SessionTranslationState>,
     /// Cached ACP model payload from `session/new`/`session/load`.
     pub(crate) models_cache: Mutex<Option<Value>>,
+    /// Pre-warmed ACP session ID created eagerly on workspace connect.
+    /// Consumed by the first `start_thread` call to avoid a duplicate `session/new`.
+    pub(crate) prewarmed_session_id: Mutex<Option<String>>,
     /// One in-flight `session/prompt` at a time per workspace session.
     pub(crate) prompt_lock: Mutex<()>,
     /// Capability state for best-effort model switching.
@@ -387,6 +390,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         background_thread_callbacks: Mutex::new(HashMap::new()),
         translation_state: Mutex::new(SessionTranslationState::new(String::new())),
         models_cache: Mutex::new(None),
+        prewarmed_session_id: Mutex::new(None),
         prompt_lock: Mutex::new(()),
         model_set_capability: Mutex::new(ModelSetCapability::Unknown),
         model_set_warning_emitted: Mutex::new(false),
@@ -563,6 +567,59 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         }),
     };
     event_sink.emit_app_server_event(payload);
+
+    // Eagerly create a session to pre-populate the models cache so the
+    // frontend model selector is populated before the user sends a prompt.
+    let prewarm_session = Arc::clone(&session);
+    let prewarm_sink = event_sink.clone();
+    let prewarm_workspace_id = entry.id.clone();
+    let prewarm_cwd = entry.path.clone();
+    tokio::spawn(async move {
+        let params = json!({
+            "cwd": prewarm_cwd,
+            "mcpServers": []
+        });
+        match prewarm_session.send_request("session/new", params).await {
+            Ok(response) => {
+                let session_id = response
+                    .get("result")
+                    .and_then(|r| r.get("sessionId"))
+                    .or_else(|| response.get("sessionId"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+
+                if let Some(models) = response
+                    .get("result")
+                    .unwrap_or(&response)
+                    .get("models")
+                    .cloned()
+                {
+                    *prewarm_session.models_cache.lock().await = Some(models);
+                }
+
+                if !session_id.is_empty() {
+                    *prewarm_session.prewarmed_session_id.lock().await =
+                        Some(session_id);
+                }
+
+                let payload = AppServerEvent {
+                    workspace_id: prewarm_workspace_id.clone(),
+                    message: json!({
+                        "method": "codex/modelsReady",
+                        "params": { "workspaceId": prewarm_workspace_id }
+                    }),
+                };
+                prewarm_sink.emit_app_server_event(payload);
+            }
+            Err(err) => {
+                eprintln!(
+                    "Pre-warm session/new failed for {}: {}",
+                    prewarm_workspace_id, err
+                );
+            }
+        }
+    });
 
     Ok(session)
 }

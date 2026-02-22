@@ -110,13 +110,24 @@ pub(crate) async fn start_thread_core(
     workspace_id: String,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
+
+    // Reuse the pre-warmed session if available (created eagerly on workspace
+    // connect to populate the models cache ahead of the first prompt).
+    if let Some(session_id) = session.prewarmed_session_id.lock().await.take() {
+        let mut ts = session.translation_state.lock().await;
+        ts.session_id = session_id.clone();
+        return Ok(json!({
+            "result": {
+                "thread": { "id": session_id }
+            }
+        }));
+    }
+
     let params = json!({
         "cwd": session.entry.path,
         "mcpServers": []
     });
     let response = session.send_request("session/new", params).await?;
-    // ACP returns { sessionId, models, modes, ... }.
-    // Frontend expects { result: { thread: { id: "..." } } }.
     let session_id = response
         .get("result")
         .and_then(|r| r.get("sessionId"))
@@ -1045,6 +1056,34 @@ pub(crate) async fn start_review_core(
     Err("review is not supported by OpenCode ACP".to_string())
 }
 
+const THINKING_LEVELS: &[&str] = &["low", "medium", "high", "max"];
+
+/// Returns `Some((base_name, level))` when `name` ends with ` (<known_level>)`.
+fn strip_thinking_suffix(name: &str) -> Option<(&str, &str)> {
+    let name = name.trim();
+    let rest = name.strip_suffix(')')?;
+    let paren_start = rest.rfind(" (")?;
+    let level = &rest[paren_start + 2..];
+    if THINKING_LEVELS
+        .iter()
+        .any(|tl| tl.eq_ignore_ascii_case(level))
+    {
+        Some((name[..paren_start].trim(), level))
+    } else {
+        None
+    }
+}
+
+fn thinking_level_order(level: &str) -> usize {
+    match level.to_ascii_lowercase().as_str() {
+        "low" => 0,
+        "medium" => 1,
+        "high" => 2,
+        "max" => 3,
+        _ => 99,
+    }
+}
+
 pub(crate) async fn model_list_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
@@ -1065,6 +1104,31 @@ pub(crate) async fn model_list_core(
         .cloned()
         .unwrap_or_default();
 
+    // Pass 1 — collect thinking-variant effort levels keyed by base display
+    // name, and record which modelIds are variants so they can be skipped.
+    let mut variant_levels: HashMap<String, Vec<String>> = HashMap::new();
+    let mut variant_model_ids: HashSet<String> = HashSet::new();
+
+    for entry in &available_models {
+        let display_name = entry
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if let Some((base_name, level)) = strip_thinking_suffix(display_name) {
+            variant_levels
+                .entry(base_name.to_string())
+                .or_default()
+                .push(level.to_string());
+            if let Some(mid) = entry.get("modelId").and_then(|v| v.as_str()) {
+                variant_model_ids.insert(mid.trim().to_string());
+            }
+        }
+    }
+    for levels in variant_levels.values_mut() {
+        levels.sort_by_key(|l| thinking_level_order(l));
+    }
+
+    // Pass 2 — emit base models only, with effort levels attached.
     let data: Vec<Value> = available_models
         .into_iter()
         .filter_map(|entry| {
@@ -1074,7 +1138,7 @@ pub(crate) async fn model_list_core(
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            if model_id.is_empty() {
+            if model_id.is_empty() || variant_model_ids.contains(&model_id) {
                 return None;
             }
             let display_name = entry
@@ -1084,13 +1148,47 @@ pub(crate) async fn model_list_core(
                 .trim()
                 .to_string();
 
+            // Prefer explicit ACP field; fall back to levels scraped from
+            // variant entries whose base name matches this model.
+            let acp_efforts = entry
+                .get("supportedReasoningEfforts")
+                .and_then(|v| v.as_array())
+                .filter(|a| !a.is_empty());
+
+            let efforts: Vec<Value> = if let Some(acp) = acp_efforts {
+                acp.iter()
+                    .map(|e| {
+                        if e.is_object() {
+                            e.clone()
+                        } else {
+                            let label = e.as_str().unwrap_or_default();
+                            json!({ "reasoningEffort": label, "description": "" })
+                        }
+                    })
+                    .collect()
+            } else {
+                variant_levels
+                    .get(&display_name)
+                    .into_iter()
+                    .flatten()
+                    .map(|level| json!({ "reasoningEffort": level, "description": "" }))
+                    .collect()
+            };
+
+            let default_effort = entry
+                .get("defaultReasoningEffort")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| Value::String(s.trim().to_string()))
+                .unwrap_or(Value::Null);
+
             Some(json!({
                 "id": model_id.clone(),
                 "model": model_id.clone(),
                 "displayName": display_name,
                 "description": "",
-                "supportedReasoningEfforts": [],
-                "defaultReasoningEffort": null,
+                "supportedReasoningEfforts": efforts,
+                "defaultReasoningEffort": default_effort,
                 "isDefault": model_id == current_model,
             }))
         })

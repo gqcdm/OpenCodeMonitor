@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DebugEntry, ModelOption, WorkspaceInfo } from "../../../types";
 import { getConfigModel, getModelList } from "../../../services/tauri";
+import { subscribeAppServerEvents } from "../../../services/events";
+import { getAppServerRawMethod } from "../../../utils/appServerEvents";
 import {
   normalizeEffortValue,
   parseModelListResponse,
@@ -286,6 +288,29 @@ export function useModels({
     }
     refreshModels();
   }, [isConnected, models.length, refreshModels, selectionKey, workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId || !isConnected) {
+      return;
+    }
+    const unsub = subscribeAppServerEvents((event) => {
+      const method = getAppServerRawMethod(event);
+      if (method !== "codex/modelsReady") {
+        return;
+      }
+      const wsId =
+        event &&
+        typeof event === "object" &&
+        "workspace_id" in event &&
+        typeof (event as Record<string, unknown>).workspace_id === "string"
+          ? (event as Record<string, unknown>).workspace_id
+          : null;
+      if (wsId === workspaceId) {
+        refreshModels();
+      }
+    });
+    return unsub;
+  }, [isConnected, refreshModels, workspaceId]);
 
   useEffect(() => {
     if (!selectedModel) {
