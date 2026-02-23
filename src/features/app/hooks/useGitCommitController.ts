@@ -93,42 +93,20 @@ export function useGitCommitController({
   }, []);
 
   const handleGenerateCommitMessage = useCallback(async () => {
-    console.log("[DEBUG:useGitCommitController] handleGenerateCommitMessage called", {
-      hasActiveWorkspace: !!activeWorkspace,
-      activeWorkspaceId: activeWorkspace?.id,
-      activeWorkspacePath: activeWorkspace?.path,
-      commitMessageLoading,
-    });
     if (!activeWorkspace || commitMessageLoading) {
-      console.log("[DEBUG:useGitCommitController] Early return:", {
-        reason: !activeWorkspace ? "no activeWorkspace" : "commitMessageLoading is true",
-      });
       return;
     }
     const workspaceId = activeWorkspace.id;
-    console.log("[DEBUG:useGitCommitController] Setting commitMessageLoading=true, workspaceId:", workspaceId);
     setCommitMessageLoading(true);
     setCommitMessageError(null);
     try {
-      console.log("[DEBUG:useGitCommitController] Calling generateCommitMessage IPC...");
-      const startTime = performance.now();
       const message = await generateCommitMessage(workspaceId, null);
-      const elapsed = performance.now() - startTime;
-      console.log("[DEBUG:useGitCommitController] generateCommitMessage returned", {
-        elapsed: `${elapsed.toFixed(0)}ms`,
-        messageLength: message?.length,
-        messagePreview: message?.substring(0, 100),
-      });
       if (!shouldApplyCommitMessage(activeWorkspaceIdRef.current, workspaceId)) {
-        console.log("[DEBUG:useGitCommitController] Skipping setCommitMessage: workspace changed during generation");
         return;
       }
-      console.log("[DEBUG:useGitCommitController] Setting commit message");
       setCommitMessage(message);
     } catch (error) {
-      console.error("[DEBUG:useGitCommitController] generateCommitMessage error:", error);
       if (!shouldApplyCommitMessage(activeWorkspaceIdRef.current, workspaceId)) {
-        console.log("[DEBUG:useGitCommitController] Skipping error handling: workspace changed");
         return;
       }
       setCommitMessageError(
@@ -136,7 +114,6 @@ export function useGitCommitController({
       );
     } finally {
       if (shouldApplyCommitMessage(activeWorkspaceIdRef.current, workspaceId)) {
-        console.log("[DEBUG:useGitCommitController] Setting commitMessageLoading=false");
         setCommitMessageLoading(false);
       }
     }

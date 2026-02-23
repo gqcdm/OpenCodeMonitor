@@ -888,21 +888,7 @@ export async function generateCommitMessage(
   workspaceId: string,
   commitMessageModelId: string | null,
 ): Promise<string> {
-  console.log("[DEBUG:tauri.ts] generateCommitMessage invoke called", {
-    workspaceId,
-    commitMessageModelId,
-  });
-  try {
-    const result = await invoke<string>("generate_commit_message", { workspaceId, commitMessageModelId });
-    console.log("[DEBUG:tauri.ts] generateCommitMessage invoke success", {
-      resultLength: result?.length,
-      resultPreview: result?.substring(0, 100),
-    });
-    return result;
-  } catch (error) {
-    console.error("[DEBUG:tauri.ts] generateCommitMessage invoke error", error);
-    throw error;
-  }
+  return invoke("generate_commit_message", { workspaceId, commitMessageModelId });
 }
 
 export async function sendNotification(

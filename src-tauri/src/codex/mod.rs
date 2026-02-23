@@ -609,12 +609,7 @@ pub(crate) async fn generate_commit_message(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    eprintln!(
-        "[DEBUG:codex/mod.rs] generate_commit_message called - workspace_id={}, model_id={:?}",
-        workspace_id, commit_message_model_id
-    );
     if remote_backend::is_remote_mode(&*state).await {
-        eprintln!("[DEBUG:codex/mod.rs] Using remote mode, proxying to daemon...");
         let value = remote_backend::call_remote(
             &*state,
             app,
@@ -625,17 +620,10 @@ pub(crate) async fn generate_commit_message(
             }),
         )
         .await?;
-        eprintln!("[DEBUG:codex/mod.rs] Remote call returned: {:?}", value);
         return serde_json::from_value(value).map_err(|err| err.to_string());
     }
 
-    eprintln!("[DEBUG:codex/mod.rs] Using local mode, getting workspace diff...");
     let diff = crate::git::get_workspace_diff(&workspace_id, &state).await?;
-    eprintln!(
-        "[DEBUG:codex/mod.rs] Got diff - length={}, preview={}",
-        diff.len(),
-        &diff.chars().take(200).collect::<String>()
-    );
 
     let (commit_message_prompt, settings_model_id) = {
         let settings = state.app_settings.lock().await;
@@ -645,25 +633,15 @@ pub(crate) async fn generate_commit_message(
         )
     };
     let model_id = commit_message_model_id.or(settings_model_id);
-    eprintln!(
-        "[DEBUG:codex/mod.rs] Using model_id={:?}, prompt_template_len={}",
-        model_id,
-        commit_message_prompt.len()
-    );
-    eprintln!("[DEBUG:codex/mod.rs] Calling generate_commit_message_core...");
-    let result = crate::shared::codex_aux_core::generate_commit_message_core(
+    crate::shared::codex_aux_core::generate_commit_message_core(
         &state.sessions,
         &state.workspaces,
         &state.storage_path,
-        workspace_id.clone(),
+        workspace_id,
         &diff,
         &commit_message_prompt,
         model_id.as_deref(),
         |workspace_id, thread_id| {
-            eprintln!(
-                "[DEBUG:codex/mod.rs] on_hide_thread callback - workspace={}, thread={}",
-                workspace_id, thread_id
-            );
             let _ = app.emit(
                 "app-server-event",
                 AppServerEvent {
@@ -679,12 +657,7 @@ pub(crate) async fn generate_commit_message(
             );
         },
     )
-    .await;
-    eprintln!(
-        "[DEBUG:codex/mod.rs] generate_commit_message_core returned: {:?}",
-        result.as_ref().map(|s| format!("Ok(len={})", s.len())).unwrap_or_else(|e| format!("Err({})", e))
-    );
-    result
+    .await
 }
 
 #[tauri::command]
