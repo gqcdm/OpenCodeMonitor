@@ -263,6 +263,7 @@ pub(crate) async fn run_background_prompt_core<F>(
     storage_path: &PathBuf,
     workspace_id: String,
     prompt: String,
+    model: Option<&str>,
     on_hide_thread: F,
     timeout_error: &str,
     turn_error_fallback: &str,
@@ -270,16 +271,29 @@ pub(crate) async fn run_background_prompt_core<F>(
 where
     F: Fn(&str, &str),
 {
+    eprintln!(
+        "[DEBUG:run_background_prompt_core] Called - workspace={}, prompt_len={}, model={:?}",
+        workspace_id, prompt.len(), model
+    );
     let session = {
         let sessions = sessions.lock().await;
+        eprintln!(
+            "[DEBUG:run_background_prompt_core] Sessions locked, available workspaces: {:?}",
+            sessions.keys().collect::<Vec<_>>()
+        );
         sessions
             .get(&workspace_id)
             .ok_or("workspace not connected")?
             .clone()
     };
+    eprintln!("[DEBUG:run_background_prompt_core] Got session for workspace");
 
-    // POST /session → { id, projectID, directory }
+    eprintln!("[DEBUG:run_background_prompt_core] Sending POST /session to create new thread...");
     let thread_result = session.rest_post("/session", json!({})).await?;
+    eprintln!(
+        "[DEBUG:run_background_prompt_core] POST /session response: {:?}",
+        thread_result
+    );
 
     let thread_id = thread_result
         .get("id")
@@ -291,6 +305,10 @@ where
             )
         })?
         .to_string();
+    eprintln!(
+        "[DEBUG:run_background_prompt_core] Created thread_id={}",
+        thread_id
+    );
 
     on_hide_thread(&workspace_id, &thread_id);
     if let Err(error) =
@@ -306,45 +324,77 @@ where
     {
         let mut callbacks = session.background_thread_callbacks.lock().await;
         callbacks.insert(thread_id.clone(), tx.clone());
+        eprintln!(
+            "[DEBUG:run_background_prompt_core] Registered callback for thread={}",
+            thread_id
+        );
     }
 
-    // prompt_async is fire-and-forget (returns 204).  Turn completion
-    // arrives via SSE → background_thread_callbacks channel.
     let prompt_path = format!("/session/{}/prompt_async", &thread_id);
-    let prompt_body = json!({
+    let mut prompt_body = json!({
         "parts": [{ "type": "text", "text": prompt }],
     });
+    if let Some(model_id) = model {
+        prompt_body["model"] = json!(model_id);
+    }
+    eprintln!(
+        "[DEBUG:run_background_prompt_core] Sending POST {} with model={:?}...",
+        prompt_path, model
+    );
     let _prompt_guard = session.prompt_lock.lock().await;
     if let Err(error) = session.rest_post(&prompt_path, prompt_body).await {
+        eprintln!(
+            "[DEBUG:run_background_prompt_core] POST prompt_async failed: {}",
+            error
+        );
         {
             let mut callbacks = session.background_thread_callbacks.lock().await;
             callbacks.remove(&thread_id);
         }
         return Err(error);
     }
+    eprintln!("[DEBUG:run_background_prompt_core] POST prompt_async succeeded, waiting for SSE events...");
 
     let mut response_text = String::new();
+    let mut event_count = 0;
     let collect_result = timeout(Duration::from_secs(60), async {
         loop {
             let Some(event) = rx.recv().await else {
+                eprintln!("[DEBUG:run_background_prompt_core] Channel closed unexpectedly");
                 return Err("Background response stream closed before completion".to_string());
             };
+            event_count += 1;
             let method = event.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            eprintln!(
+                "[DEBUG:run_background_prompt_core] Event #{} method={}, payload_preview={}",
+                event_count, method, &event.to_string().chars().take(200).collect::<String>()
+            );
             match method {
                 "item/agentMessage/delta" => {
                     if let Some(params) = event.get("params") {
                         if let Some(delta) = params.get("delta").and_then(|d| d.as_str()) {
                             response_text.push_str(delta);
+                            eprintln!(
+                                "[DEBUG:run_background_prompt_core] Appended delta, response_text_len={}",
+                                response_text.len()
+                            );
                         }
                     }
                 }
-                "turn/completed" => break,
+                "turn/completed" => {
+                    eprintln!("[DEBUG:run_background_prompt_core] turn/completed received");
+                    break;
+                }
                 "turn/error" => {
                     let error_msg = event
                         .get("params")
                         .and_then(|p| p.get("error"))
                         .and_then(|e| e.as_str())
                         .unwrap_or(turn_error_fallback);
+                    eprintln!(
+                        "[DEBUG:run_background_prompt_core] turn/error received: {}",
+                        error_msg
+                    );
                     return Err(error_msg.to_string());
                 }
                 "error" => {
@@ -354,14 +404,27 @@ where
                         .and_then(|e| e.get("message").or_else(|| e.get("error")))
                         .and_then(|e| e.as_str())
                         .unwrap_or(turn_error_fallback);
+                    eprintln!(
+                        "[DEBUG:run_background_prompt_core] error received: {}",
+                        error_msg
+                    );
                     return Err(error_msg.to_string());
                 }
-                _ => {}
+                _ => {
+                    eprintln!(
+                        "[DEBUG:run_background_prompt_core] Ignoring event method={}",
+                        method
+                    );
+                }
             }
         }
         Ok(())
     })
     .await;
+    eprintln!(
+        "[DEBUG:run_background_prompt_core] Event loop finished, processed {} events, response_len={}",
+        event_count, response_text.len()
+    );
 
     {
         let mut callbacks = session.background_thread_callbacks.lock().await;
@@ -369,16 +432,33 @@ where
     }
 
     match collect_result {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => return Err(error),
-        Err(_) => return Err(timeout_error.to_string()),
+        Ok(Ok(())) => {
+            eprintln!("[DEBUG:run_background_prompt_core] Collection succeeded");
+        }
+        Ok(Err(error)) => {
+            eprintln!(
+                "[DEBUG:run_background_prompt_core] Collection returned error: {}",
+                error
+            );
+            return Err(error);
+        }
+        Err(_) => {
+            eprintln!("[DEBUG:run_background_prompt_core] Collection timed out after 60s");
+            return Err(timeout_error.to_string());
+        }
     }
 
     let trimmed = response_text.trim().to_string();
     if trimmed.is_empty() {
+        eprintln!("[DEBUG:run_background_prompt_core] Response was empty after trim");
         return Err("No response was generated".to_string());
     }
 
+    eprintln!(
+        "[DEBUG:run_background_prompt_core] Success - response_len={}, preview={}...",
+        trimmed.len(),
+        &trimmed.chars().take(100).collect::<String>()
+    );
     Ok(trimmed)
 }
 
@@ -417,23 +497,39 @@ pub(crate) async fn generate_commit_message_core<F>(
     workspace_id: String,
     diff: &str,
     template: &str,
+    model: Option<&str>,
     on_hide_thread: F,
 ) -> Result<String, String>
 where
     F: Fn(&str, &str),
 {
+    eprintln!(
+        "[DEBUG:codex_aux_core] generate_commit_message_core called - workspace={}, diff_len={}, template_len={}, model={:?}",
+        workspace_id, diff.len(), template.len(), model
+    );
     let prompt = build_commit_message_prompt_for_diff(diff, template)?;
-    run_background_prompt_core(
+    eprintln!(
+        "[DEBUG:codex_aux_core] Built prompt - len={}, preview={}...",
+        prompt.len(),
+        &prompt.chars().take(200).collect::<String>()
+    );
+    let result = run_background_prompt_core(
         sessions,
         workspaces,
         storage_path,
-        workspace_id,
+        workspace_id.clone(),
         prompt,
+        model,
         on_hide_thread,
         "Timeout waiting for commit message generation",
         "Unknown error during commit message generation",
     )
-    .await
+    .await;
+    eprintln!(
+        "[DEBUG:codex_aux_core] generate_commit_message_core result: {:?}",
+        result.as_ref().map(|s| format!("Ok(len={})", s.len())).unwrap_or_else(|e| format!("Err({})", e))
+    );
+    result
 }
 
 pub(crate) async fn generate_run_metadata_core<F>(
@@ -459,6 +555,7 @@ where
         storage_path,
         workspace_id,
         metadata_prompt,
+        None,
         on_hide_thread,
         "Timeout waiting for metadata generation",
         "Unknown error during metadata generation",

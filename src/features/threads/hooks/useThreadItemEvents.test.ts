@@ -13,6 +13,7 @@ type ItemPayload = Record<string, unknown>;
 type SetupOverrides = {
   activeThreadId?: string | null;
   getCustomName?: (workspaceId: string, threadId: string) => string | undefined;
+  hasActiveTurn?: (threadId: string) => boolean;
   onUserMessageCreated?: (workspaceId: string, threadId: string, text: string) => void;
   onReviewExited?: (workspaceId: string, threadId: string) => void;
 };
@@ -21,6 +22,9 @@ const makeOptions = (overrides: SetupOverrides = {}) => {
   const dispatch = vi.fn();
   const markProcessing = vi.fn();
   const markReviewing = vi.fn();
+  const hasActiveTurn = overrides.hasActiveTurn
+    ? vi.fn(overrides.hasActiveTurn)
+    : vi.fn(() => true);
   const safeMessageActivity = vi.fn();
   const recordThreadActivity = vi.fn();
   const applyCollabThreadLinks = vi.fn();
@@ -34,6 +38,7 @@ const makeOptions = (overrides: SetupOverrides = {}) => {
       getCustomName,
       markProcessing,
       markReviewing,
+      hasActiveTurn,
       safeMessageActivity,
       recordThreadActivity,
       applyCollabThreadLinks,
@@ -47,6 +52,7 @@ const makeOptions = (overrides: SetupOverrides = {}) => {
     dispatch,
     markProcessing,
     markReviewing,
+    hasActiveTurn,
     safeMessageActivity,
     recordThreadActivity,
     applyCollabThreadLinks,
@@ -291,6 +297,83 @@ describe("useThreadItemEvents", () => {
       threadId: "thread-1",
       itemId: "plan-1",
       delta: "- Step 1",
+    });
+  });
+
+  describe("late event handling when turn is not active", () => {
+    it("does not mark processing on agent delta when turn is not active", () => {
+      const { result, dispatch, markProcessing } = makeOptions({
+        hasActiveTurn: () => false,
+      });
+
+      act(() => {
+        result.current.onAgentMessageDelta({
+          workspaceId: "ws-1",
+          threadId: "thread-1",
+          itemId: "assistant-1",
+          delta: "Late message",
+        });
+      });
+
+      expect(markProcessing).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "appendAgentDelta",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        itemId: "assistant-1",
+        delta: "Late message",
+        hasCustomName: false,
+      });
+    });
+
+    it("does not mark processing on command output delta when turn is not active", () => {
+      const { result, dispatch, markProcessing, safeMessageActivity } = makeOptions({
+        hasActiveTurn: () => false,
+      });
+
+      act(() => {
+        result.current.onCommandOutputDelta("ws-1", "thread-1", "tool-1", "output");
+      });
+
+      expect(markProcessing).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "appendToolOutput",
+        threadId: "thread-1",
+        itemId: "tool-1",
+        delta: "output",
+      });
+      expect(safeMessageActivity).toHaveBeenCalled();
+    });
+
+    it("does not mark processing on file change output delta when turn is not active", () => {
+      const { result, dispatch, markProcessing } = makeOptions({
+        hasActiveTurn: () => false,
+      });
+
+      act(() => {
+        result.current.onFileChangeOutputDelta("ws-1", "thread-1", "tool-1", "diff");
+      });
+
+      expect(markProcessing).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "appendToolOutput",
+        threadId: "thread-1",
+        itemId: "tool-1",
+        delta: "diff",
+      });
+    });
+
+    it("does not mark processing on item started when turn is not active", () => {
+      const { result, markProcessing } = makeOptions({
+        hasActiveTurn: () => false,
+      });
+      const item: ItemPayload = { type: "commandExecution", id: "tool-1" };
+
+      act(() => {
+        result.current.onItemStarted("ws-1", "thread-1", item);
+      });
+
+      expect(markProcessing).not.toHaveBeenCalled();
     });
   });
 });

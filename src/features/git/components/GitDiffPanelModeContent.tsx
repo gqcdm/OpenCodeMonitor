@@ -490,9 +490,18 @@ export function GitDiffModeContent({
               type="button"
               className="commit-message-generate-button"
               onClick={() => {
+                console.log("[DEBUG:GitDiffPanelModeContent] Generate commit message button clicked", {
+                  canGenerateCommitMessage,
+                  commitMessageLoading,
+                  stagedFilesCount: stagedFiles.length,
+                  unstagedFilesCount: unstagedFiles.length,
+                  hasOnGenerateCommitMessage: !!onGenerateCommitMessage,
+                });
                 if (!canGenerateCommitMessage) {
+                  console.log("[DEBUG:GitDiffPanelModeContent] Early return: canGenerateCommitMessage is false");
                   return;
                 }
+                console.log("[DEBUG:GitDiffPanelModeContent] Calling onGenerateCommitMessage...");
                 void onGenerateCommitMessage?.();
               }}
               disabled={commitMessageLoading || !canGenerateCommitMessage}

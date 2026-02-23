@@ -17,6 +17,7 @@ type ThreadEventHandlersOptions = {
   markProcessing: (threadId: string, isProcessing: boolean) => void;
   markReviewing: (threadId: string, isReviewing: boolean) => void;
   setActiveTurnId: (threadId: string, turnId: string | null) => void;
+  hasActiveTurn: (threadId: string) => boolean;
   safeMessageActivity: () => void;
   recordThreadActivity: (
     workspaceId: string,
@@ -49,6 +50,7 @@ export function useThreadEventHandlers({
   markProcessing,
   markReviewing,
   setActiveTurnId,
+  hasActiveTurn,
   safeMessageActivity,
   recordThreadActivity,
   onUserMessageCreated,
@@ -84,6 +86,7 @@ export function useThreadEventHandlers({
     getCustomName,
     markProcessing,
     markReviewing,
+    hasActiveTurn,
     safeMessageActivity,
     recordThreadActivity,
     applyCollabThreadLinks,

@@ -66,6 +66,7 @@ export function useThreads({
   const planByThreadRef = useRef(state.planByThread);
   const itemsByThreadRef = useRef(state.itemsByThread);
   const threadsByWorkspaceRef = useRef(state.threadsByWorkspace);
+  const activeTurnIdByThreadRef = useRef(state.activeTurnIdByThread);
   const detachedReviewStartedNoticeRef = useRef<Set<string>>(new Set());
   const detachedReviewCompletedNoticeRef = useRef<Set<string>>(new Set());
   const detachedReviewParentByChildRef = useRef<Record<string, string>>({});
@@ -73,6 +74,7 @@ export function useThreads({
   planByThreadRef.current = state.planByThread;
   itemsByThreadRef.current = state.itemsByThread;
   threadsByWorkspaceRef.current = state.threadsByWorkspace;
+  activeTurnIdByThreadRef.current = state.activeTurnIdByThread;
   const { approvalAllowlistRef, handleApprovalDecision, handleApprovalRemember } =
     useThreadApprovals({ dispatch, onDebug });
   const { handleUserInputSubmit, handleUserInputDismiss } = useThreadUserInput({ dispatch });
@@ -134,6 +136,13 @@ export function useThreads({
       // Ignore refresh errors to avoid breaking the UI.
     }
   }, [onMessageActivity]);
+
+  const hasActiveTurn = useCallback(
+    (threadId: string) => {
+      return Boolean(activeTurnIdByThreadRef.current[threadId]);
+    },
+    [],
+  );
 
   const renameThread = useCallback(
     (workspaceId: string, threadId: string, newName: string) => {
@@ -312,6 +321,7 @@ export function useThreads({
     markProcessing,
     markReviewing,
     setActiveTurnId,
+    hasActiveTurn,
     safeMessageActivity,
     recordThreadActivity,
     onUserMessageCreated,

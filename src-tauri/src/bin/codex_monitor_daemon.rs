@@ -1125,17 +1125,25 @@ impl DaemonState {
         codex_aux_core::codex_doctor_core(&self.app_settings, codex_bin, codex_args).await
     }
 
-    async fn generate_commit_message(&self, workspace_id: String) -> Result<String, String> {
+    async fn generate_commit_message(
+        &self,
+        workspace_id: String,
+        commit_message_model_id: Option<String>,
+    ) -> Result<String, String> {
         let repo_root = git_ui_core::resolve_repo_root_for_workspace_core(
             &self.workspaces,
             workspace_id.clone(),
         )
         .await?;
         let diff = git_ui_core::collect_workspace_diff_core(&repo_root)?;
-        let commit_message_prompt = {
+        let (commit_message_prompt, settings_model_id) = {
             let settings = self.app_settings.lock().await;
-            settings.commit_message_prompt.clone()
+            (
+                settings.commit_message_prompt.clone(),
+                settings.commit_message_model_id.clone(),
+            )
         };
+        let model_id = commit_message_model_id.or(settings_model_id);
         codex_aux_core::generate_commit_message_core(
             &self.sessions,
             &self.workspaces,
@@ -1143,6 +1151,7 @@ impl DaemonState {
             workspace_id,
             &diff,
             &commit_message_prompt,
+            model_id.as_deref(),
             |workspace_id, thread_id| {
                 emit_background_thread_hide(&self.event_sink, workspace_id, thread_id);
             },

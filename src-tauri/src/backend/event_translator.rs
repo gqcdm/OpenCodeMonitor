@@ -167,14 +167,17 @@ pub(crate) fn translate_sse_event(
         "message.part.delta" => translate_part_delta(properties, state),
         "message.updated" => translate_message_updated(properties, state),
         "session.status" => translate_session_status(properties, state),
+        "session.idle" => translate_session_idle(properties, state),
         "permission.updated" => translate_sse_permission(properties, state),
         "question.asked" => translate_question_asked(properties, state),
         "question.replied" => translate_question_completed(properties),
         "question.rejected" => translate_question_completed(properties),
         "server.heartbeat"
         | "file.watcher.updated"
+        | "session.created"
         | "session.updated"
         | "session.deleted"
+        | "session.diff"
         | "config.updated" => vec![],
         _ => {
             #[cfg(debug_assertions)]
@@ -586,6 +589,63 @@ fn translate_session_status(properties: &Value, state: &mut SessionTranslationSt
         }
         _ => vec![],
     }
+}
+
+// ---------------------------------------------------------------------------
+// session.idle — separate event type indicating session has become idle
+// ---------------------------------------------------------------------------
+
+fn translate_session_idle(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG:translate_session_idle] properties={}", properties);
+
+    let session_id = properties
+        .get("sessionID")
+        .or_else(|| properties.get("session_id"))
+        .or_else(|| properties.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[DEBUG:translate_session_idle] extracted session_id={:?}, state.session_id={:?}",
+        session_id, state.session_id
+    );
+
+    if !session_id.is_empty() {
+        state.session_id = session_id.to_string();
+    }
+
+    let thread_id = state.session_id.clone();
+    if thread_id.is_empty() {
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG:translate_session_idle] No thread_id, returning empty");
+        return vec![];
+    }
+
+    let turn_id = state
+        .get_turn_state(&thread_id)
+        .map(|ts| ts.turn_id.clone())
+        .unwrap_or_default();
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[DEBUG:translate_session_idle] thread_id={:?}, turn_id={:?}",
+        thread_id, turn_id
+    );
+
+    let mut events = Vec::new();
+    if let Some(msg_completed) = build_agent_message_completed(state, &thread_id) {
+        events.push(msg_completed);
+    }
+    // Emit turn/completed even if turn_id is empty - background prompts don't track turns
+    events.push(build_turn_completed(&thread_id, &turn_id));
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[DEBUG:translate_session_idle] Emitting {} events including turn/completed",
+        events.len()
+    );
+    events
 }
 
 // ---------------------------------------------------------------------------

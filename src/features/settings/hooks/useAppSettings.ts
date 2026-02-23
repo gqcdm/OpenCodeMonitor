@@ -76,6 +76,7 @@ function buildDefaultSettings(): AppSettings {
     preloadGitDiffs: true,
     gitDiffIgnoreWhitespaceChanges: false,
     commitMessagePrompt: DEFAULT_COMMIT_MESSAGE_PROMPT,
+    commitMessageModelId: null,
     experimentalCollabEnabled: false,
     collaborationModesEnabled: true,
     steerEnabled: true,

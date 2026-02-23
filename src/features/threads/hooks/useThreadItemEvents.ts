@@ -10,6 +10,7 @@ type UseThreadItemEventsOptions = {
   getCustomName: (workspaceId: string, threadId: string) => string | undefined;
   markProcessing: (threadId: string, isProcessing: boolean) => void;
   markReviewing: (threadId: string, isReviewing: boolean) => void;
+  hasActiveTurn: (threadId: string) => boolean;
   safeMessageActivity: () => void;
   recordThreadActivity: (
     workspaceId: string,
@@ -34,6 +35,7 @@ export function useThreadItemEvents({
   getCustomName,
   markProcessing,
   markReviewing,
+  hasActiveTurn,
   safeMessageActivity,
   recordThreadActivity,
   applyCollabThreadLinks,
@@ -48,7 +50,7 @@ export function useThreadItemEvents({
       shouldMarkProcessing: boolean,
     ) => {
       dispatch({ type: "ensureThread", workspaceId, threadId });
-      if (shouldMarkProcessing) {
+      if (shouldMarkProcessing && hasActiveTurn(threadId)) {
         markProcessing(threadId, true);
       }
       applyCollabThreadLinks(threadId, item);
@@ -88,6 +90,7 @@ export function useThreadItemEvents({
       applyCollabThreadLinks,
       dispatch,
       getCustomName,
+      hasActiveTurn,
       markProcessing,
       markReviewing,
       onReviewExited,
@@ -98,11 +101,13 @@ export function useThreadItemEvents({
 
   const handleToolOutputDelta = useCallback(
     (threadId: string, itemId: string, delta: string) => {
-      markProcessing(threadId, true);
+      if (hasActiveTurn(threadId)) {
+        markProcessing(threadId, true);
+      }
       dispatch({ type: "appendToolOutput", threadId, itemId, delta });
       safeMessageActivity();
     },
-    [dispatch, markProcessing, safeMessageActivity],
+    [dispatch, hasActiveTurn, markProcessing, safeMessageActivity],
   );
 
   const handleTerminalInteraction = useCallback(
@@ -130,7 +135,9 @@ export function useThreadItemEvents({
       delta: string;
     }) => {
       dispatch({ type: "ensureThread", workspaceId, threadId });
-      markProcessing(threadId, true);
+      if (hasActiveTurn(threadId)) {
+        markProcessing(threadId, true);
+      }
       const hasCustomName = Boolean(getCustomName(workspaceId, threadId));
       dispatch({
         type: "appendAgentDelta",
@@ -141,7 +148,7 @@ export function useThreadItemEvents({
         hasCustomName,
       });
     },
-    [dispatch, getCustomName, markProcessing],
+    [dispatch, getCustomName, hasActiveTurn, markProcessing],
   );
 
   const onAgentMessageCompleted = useCallback(
