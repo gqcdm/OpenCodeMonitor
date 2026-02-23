@@ -1,17 +1,17 @@
-# App-Server Events Reference (OpenCode ACP)
+# App-Server Events Reference
 
-This document describes the events OpenCode Monitor currently emits to the frontend after ACP-to-CodexMonitor translation.
+Events the Rust backend emits to the frontend after protocol-to-CodexMonitor translation.
 
 ## Source Of Truth
 
-- ACP process + stdout routing: `src-tauri/src/backend/app_server.rs`
-- ACP `session/update` translation: `src-tauri/src/backend/event_translator.rs`
+- Process management + event routing: `src-tauri/src/backend/app_server.rs`
+- Protocol event translation: `src-tauri/src/backend/event_translator.rs`
 - Frontend method parser: `src/utils/appServerEvents.ts`
 - Frontend event router: `src/features/app/hooks/useAppServerEvents.ts`
 
 ## Supported Event Methods
 
-These methods are currently recognized by `SUPPORTED_APP_SERVER_METHODS` and routed into thread/app state handlers:
+These methods are recognized by `SUPPORTED_APP_SERVER_METHODS` and routed into thread/app state handlers:
 
 - `app/list/updated`
 - `codex/connected`
@@ -41,21 +41,6 @@ These methods are currently recognized by `SUPPORTED_APP_SERVER_METHODS` and rou
 - `account/login/completed`
 - `error`
 
-## ACP Session Update Mapping
-
-Current `session/update` mappings in `event_translator.rs`:
-
-- `agent_message_chunk` -> `item/agentMessage/delta`
-- `agent_thought_chunk` -> `item/reasoning/textDelta`
-- `tool_call` -> `item/started`
-- `tool_call_update` -> tool deltas + `item/completed`
-- `usage_update` -> `thread/tokenUsage/updated`
-- `plan` -> `turn/plan/updated`
-- `user_message_chunk` -> `item/completed` (`userMessage`) during replay (live sends use synthetic user items)
-- dropped intentionally: `available_commands_update`
-
-Unknown ACP `sessionUpdate` values are ignored (debug builds log them to stderr).
-
 ## Background Helper Routing
 
 When translated events include a `params.threadId` that matches a registered background helper callback, the backend sends those translated events to the callback channel instead of the app event sink.
@@ -64,13 +49,14 @@ This prevents helper traffic from leaking into the visible thread stream while s
 
 ## Synthetic Turn Lifecycle
 
-ACP has no native turn lifecycle notifications. OpenCode Monitor emits:
+OpenCode has no native turn lifecycle notifications. The backend emits:
 
-- `turn/started` before `session/prompt`
-- `turn/completed` only after a successful `session/prompt` response
+- `turn/started` before sending a prompt
+- `turn/completed` after a successful prompt response
 - `error` for failed prompt paths (instead of emitting `turn/completed`)
 
 ## Notes
 
-- All ACP translation stays in Rust by design.
-- Frontend should continue consuming CodexMonitor-shaped events and avoid protocol-specific logic.
+- All protocol translation stays in Rust by design.
+- Frontend consumes CodexMonitor-shaped events and avoids protocol-specific logic.
+- For the protocol-to-CodexMonitor event mapping, see `docs/shaping/rest-api-migration.md`.

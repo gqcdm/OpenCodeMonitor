@@ -109,9 +109,9 @@ When adding a new method, keep method names and payload shape aligned with `src/
 
 All cross-runtime domain behavior belongs in `src-tauri/src/shared/*`:
 
-- Codex threads/approvals/account/skills/config: `src-tauri/src/shared/codex_core.rs`
-- Codex helper commands: `src-tauri/src/shared/codex_aux_core.rs`
-- Codex update/version helpers: `src-tauri/src/shared/codex_update_core.rs`
+- OpenCode protocol methods (sessions/approvals/account/models): `src-tauri/src/shared/codex_core.rs`
+- Helper commands: `src-tauri/src/shared/codex_aux_core.rs`
+- Update/version helpers: `src-tauri/src/shared/codex_update_core.rs`
 - Workspaces/worktrees: `src-tauri/src/shared/workspaces_core.rs`, `src-tauri/src/shared/workspaces_core/*`, `src-tauri/src/shared/worktree_core.rs`
 - Settings model/update: `src-tauri/src/shared/settings_core.rs`
 - Files read/write: `src-tauri/src/shared/files_core.rs`
