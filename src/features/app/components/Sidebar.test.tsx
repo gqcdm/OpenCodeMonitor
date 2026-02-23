@@ -29,8 +29,6 @@ const baseProps = {
   onRefreshAllThreads: vi.fn(),
   activeWorkspaceId: null,
   activeThreadId: null,
-  accountRateLimits: null,
-  usageShowRemaining: false,
   accountInfo: null,
   onSwitchAccount: vi.fn(),
   onCancelSwitchAccount: vi.fn(),

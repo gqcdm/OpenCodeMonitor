@@ -1,7 +1,6 @@
 import type {
   AccountSnapshot,
   RequestUserInputRequest,
-  RateLimitSnapshot,
   ThreadListSortKey,
   ThreadSummary,
   WorkspaceInfo,
@@ -19,7 +18,6 @@ import {
   PopoverSurface,
 } from "../../design-system/components/popover/PopoverPrimitives";
 import { SidebarCornerActions } from "./SidebarCornerActions";
-import { SidebarFooter } from "./SidebarFooter";
 import { SidebarHeader } from "./SidebarHeader";
 import { ThreadList } from "./ThreadList";
 import { ThreadLoading } from "./ThreadLoading";
@@ -33,7 +31,6 @@ import { useSidebarScrollFade } from "../hooks/useSidebarScrollFade";
 import { useThreadRows } from "../hooks/useThreadRows";
 import { useDismissibleMenu } from "../hooks/useDismissibleMenu";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
-import { getUsageLabels } from "../utils/usageLabels";
 import { formatRelativeTimeShort } from "../../../utils/time";
 
 const COLLAPSED_GROUPS_STORAGE_KEY = "codexmonitor.collapsedGroups";
@@ -68,8 +65,6 @@ type SidebarProps = {
   activeWorkspaceId: string | null;
   activeThreadId: string | null;
   userInputRequests?: RequestUserInputRequest[];
-  accountRateLimits: RateLimitSnapshot | null;
-  usageShowRemaining: boolean;
   accountInfo: AccountSnapshot | null;
   onSwitchAccount: () => void;
   onCancelSwitchAccount: () => void;
@@ -125,8 +120,6 @@ export const Sidebar = memo(function Sidebar({
   activeWorkspaceId,
   activeThreadId,
   userInputRequests = [],
-  accountRateLimits,
-  usageShowRemaining,
   accountInfo,
   onSwitchAccount,
   onCancelSwitchAccount,
@@ -190,14 +183,6 @@ export const Sidebar = memo(function Sidebar({
       onDeleteWorkspace,
       onDeleteWorktree,
     });
-  const {
-    sessionPercent,
-    weeklyPercent,
-    sessionResetLabel,
-    weeklyResetLabel,
-    creditsLabel,
-    showWeekly,
-  } = getUsageLabels(accountRateLimits, usageShowRemaining);
   const debouncedQuery = useDebouncedValue(searchQuery, 150);
   const normalizedQuery = debouncedQuery.trim().toLowerCase();
   const pendingUserInputKeys = useMemo(
@@ -704,14 +689,6 @@ export const Sidebar = memo(function Sidebar({
           )}
         </div>
       </div>
-      <SidebarFooter
-        sessionPercent={sessionPercent}
-        weeklyPercent={weeklyPercent}
-        sessionResetLabel={sessionResetLabel}
-        weeklyResetLabel={weeklyResetLabel}
-        creditsLabel={creditsLabel}
-        showWeekly={showWeekly}
-      />
       <SidebarCornerActions
         onOpenSettings={onOpenSettings}
         onOpenDebug={onOpenDebug}

@@ -27,7 +27,6 @@ import type {
   PullRequestReviewAction,
   PullRequestReviewIntent,
   PullRequestSelectionRange,
-  RateLimitSnapshot,
   RequestUserInputRequest,
   RequestUserInputResponse,
   SkillOption,
@@ -115,8 +114,7 @@ export type LayoutNodesOptions = {
   activeWorkspaceId: string | null;
   activeThreadId: string | null;
   activeItems: ConversationItem[];
-  activeRateLimits: RateLimitSnapshot | null;
-  usageShowRemaining: boolean;
+  activeTokenUsage: ThreadTokenUsage | null;
   accountInfo: AccountSnapshot | null;
   onSwitchAccount: () => void;
   onCancelSwitchAccount: () => void;
@@ -406,7 +404,6 @@ export type LayoutNodesOptions = {
   onReviewPromptConfirmCommit: () => Promise<void>;
   onReviewPromptUpdateCustomInstructions: (value: string) => void;
   onReviewPromptConfirmCustom: () => Promise<void>;
-  activeTokenUsage: ThreadTokenUsage | null;
   activeQueue: QueuedMessage[];
   draftText: string;
   onDraftChange: (next: string) => void;

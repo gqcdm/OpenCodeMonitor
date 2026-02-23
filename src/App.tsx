@@ -512,7 +512,6 @@ function MainApp() {
     threadListCursorByWorkspace,
     activeTurnIdByThread,
     tokenUsageByThread,
-    rateLimitsByWorkspace,
     accountByWorkspace,
     planByThread,
     lastAgentMessageByThread,
@@ -1112,9 +1111,6 @@ function MainApp() {
     getWorkspaceGroupName,
   });
 
-  const activeRateLimits = activeWorkspaceId
-    ? rateLimitsByWorkspace[activeWorkspaceId] ?? null
-    : null;
   const activeTokenUsage = activeThreadId
     ? tokenUsageByThread[activeThreadId] ?? null
     : null;
@@ -1735,8 +1731,7 @@ function MainApp() {
     activeWorkspaceId,
     activeThreadId,
     activeItems,
-    activeRateLimits,
-    usageShowRemaining: appSettings.usageShowRemaining,
+    activeTokenUsage,
     accountInfo: activeAccount,
     onSwitchAccount: handleSwitchAccount,
     onCancelSwitchAccount: handleCancelSwitchAccount,
@@ -2059,7 +2054,6 @@ function MainApp() {
     onReviewPromptConfirmCommit: confirmCommit,
     onReviewPromptUpdateCustomInstructions: updateCustomInstructions,
     onReviewPromptConfirmCustom: confirmCustom,
-    activeTokenUsage,
     activeQueue,
     draftText: activeDraft,
     onDraftChange: handleDraftChange,

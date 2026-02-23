@@ -51,6 +51,10 @@ export function ComposerMetaBar({
     contextFreePercent === null
       ? "Context free --"
       : `Context free ${Math.round(contextFreePercent)}%`;
+  const contextTooltip =
+    usedTokens > 0 && contextWindow
+      ? `${usedTokens.toLocaleString()} of ${contextWindow.toLocaleString()} tokens`
+      : contextLabel;
   return (
     <div className="composer-bar">
       <div className="composer-meta">
@@ -159,8 +163,8 @@ export function ComposerMetaBar({
       <div className="composer-context">
         <div
           className="composer-context-ring"
-          data-tooltip={contextLabel}
-          aria-label={contextLabel}
+          data-tooltip={contextTooltip}
+          aria-label={contextTooltip}
           style={
             {
               "--context-free": contextFreePercent ?? 0,

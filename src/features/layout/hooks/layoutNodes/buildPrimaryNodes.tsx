@@ -60,8 +60,6 @@ export function buildPrimaryNodes(options: LayoutNodesOptions): PrimaryLayoutNod
       activeWorkspaceId={options.activeWorkspaceId}
       activeThreadId={options.activeThreadId}
       userInputRequests={options.userInputRequests}
-      accountRateLimits={options.activeRateLimits}
-      usageShowRemaining={options.usageShowRemaining}
       accountInfo={options.accountInfo}
       onSwitchAccount={options.onSwitchAccount}
       onCancelSwitchAccount={options.onCancelSwitchAccount}
