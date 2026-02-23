@@ -649,6 +649,59 @@ describe("threadItems", () => {
     }
   });
 
+  it("builds explore items from event translator events", () => {
+    const item = buildConversationItem({
+      type: "explore",
+      id: "explore-1",
+      status: "explored",
+      entries: [
+        { kind: "read", label: "foo.ts", detail: "src/foo.ts" },
+        { kind: "search", label: "useState in src" },
+        { kind: "list", label: "src/components" },
+      ],
+    });
+    expect(item).not.toBeNull();
+    if (item && item.kind === "explore") {
+      expect(item.status).toBe("explored");
+      expect(item.entries).toHaveLength(3);
+      expect(item.entries[0]).toEqual({ kind: "read", label: "foo.ts", detail: "src/foo.ts" });
+      expect(item.entries[1]).toEqual({ kind: "search", label: "useState in src" });
+      expect(item.entries[2]).toEqual({ kind: "list", label: "src/components" });
+    }
+  });
+
+  it("builds explore items with exploring status", () => {
+    const item = buildConversationItem({
+      type: "explore",
+      id: "explore-2",
+      status: "exploring",
+      entries: [{ kind: "read", label: "bar.ts" }],
+    });
+    expect(item).not.toBeNull();
+    if (item && item.kind === "explore") {
+      expect(item.status).toBe("exploring");
+    }
+  });
+
+  it("filters invalid explore entry kinds", () => {
+    const item = buildConversationItem({
+      type: "explore",
+      id: "explore-3",
+      status: "explored",
+      entries: [
+        { kind: "read", label: "valid.ts" },
+        { kind: "invalid", label: "ignored" },
+        { kind: "search", label: "also valid" },
+      ],
+    });
+    expect(item).not.toBeNull();
+    if (item && item.kind === "explore") {
+      expect(item.entries).toHaveLength(2);
+      expect(item.entries[0].kind).toBe("read");
+      expect(item.entries[1].kind).toBe("search");
+    }
+  });
+
   it("parses ISO timestamps for thread updates", () => {
     const timestamp = getThreadTimestamp({ updated_at: "2025-01-01T00:00:00Z" });
     expect(timestamp).toBe(Date.parse("2025-01-01T00:00:00Z"));

@@ -329,6 +329,7 @@ export function useThreads({
     onDebug,
     onWorkspaceConnected: handleWorkspaceConnected,
     applyCollabThreadLinks,
+    updateThreadParent,
     onReviewExited: handleReviewExited,
     approvalAllowlistRef,
     pendingInterruptsRef,

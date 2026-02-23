@@ -8,6 +8,7 @@ import {
   normalizeRateLimits,
   normalizeTokenUsage,
 } from "@threads/utils/threadNormalize";
+import { getParentThreadIdFromSource } from "@threads/utils/threadRpc";
 import { useThreadTurnEvents } from "./useThreadTurnEvents";
 
 vi.mock("@services/tauri", () => ({
@@ -20,6 +21,10 @@ vi.mock("@threads/utils/threadNormalize", () => ({
   normalizePlanUpdate: vi.fn(),
   normalizeRateLimits: vi.fn(),
   normalizeTokenUsage: vi.fn(),
+}));
+
+vi.mock("@threads/utils/threadRpc", () => ({
+  getParentThreadIdFromSource: vi.fn(() => null),
 }));
 
 type SetupOverrides = {
@@ -37,6 +42,7 @@ const makeOptions = (overrides: SetupOverrides = {}) => {
   const pushThreadErrorMessage = vi.fn();
   const safeMessageActivity = vi.fn();
   const recordThreadActivity = vi.fn();
+  const updateThreadParent = vi.fn();
   const pendingInterruptsRef = {
     current: new Set(overrides.pendingInterrupts ?? []),
   };
@@ -57,6 +63,7 @@ const makeOptions = (overrides: SetupOverrides = {}) => {
       pushThreadErrorMessage,
       safeMessageActivity,
       recordThreadActivity,
+      updateThreadParent,
     }),
   );
 
@@ -71,6 +78,7 @@ const makeOptions = (overrides: SetupOverrides = {}) => {
     pushThreadErrorMessage,
     safeMessageActivity,
     recordThreadActivity,
+    updateThreadParent,
     pendingInterruptsRef,
     planByThreadRef,
   };
@@ -82,7 +90,13 @@ describe("useThreadTurnEvents", () => {
   });
 
   it("upserts thread summaries when a thread starts", () => {
-    const { result, dispatch, recordThreadActivity, safeMessageActivity } =
+    const {
+      result,
+      dispatch,
+      recordThreadActivity,
+      safeMessageActivity,
+      updateThreadParent,
+    } =
       makeOptions();
 
     act(() => {
@@ -115,7 +129,37 @@ describe("useThreadTurnEvents", () => {
       "thread-1",
       1_700_000_000_000,
     );
+    expect(updateThreadParent).not.toHaveBeenCalled();
     expect(safeMessageActivity).toHaveBeenCalled();
+  });
+
+  it("links thread to parent when thread started payload includes a parent id", () => {
+    const { result, updateThreadParent } = makeOptions();
+
+    act(() => {
+      result.current.onThreadStarted("ws-1", {
+        id: "thread-child",
+        parentId: "thread-parent",
+        preview: "Child thread",
+      });
+    });
+
+    expect(updateThreadParent).toHaveBeenCalledWith("thread-parent", ["thread-child"]);
+  });
+
+  it("links thread using source metadata when present", () => {
+    const { result, updateThreadParent } = makeOptions();
+    vi.mocked(getParentThreadIdFromSource).mockReturnValueOnce("thread-parent-source");
+
+    act(() => {
+      result.current.onThreadStarted("ws-1", {
+        id: "thread-child",
+        source: { some: "source" },
+        preview: "Child thread",
+      });
+    });
+
+    expect(updateThreadParent).toHaveBeenCalledWith("thread-parent-source", ["thread-child"]);
   });
 
   it("does not override custom thread names on thread started", () => {
@@ -322,6 +366,7 @@ describe("useThreadTurnEvents", () => {
     const pushThreadErrorMessage = vi.fn();
     const safeMessageActivity = vi.fn();
     const recordThreadActivity = vi.fn();
+    const updateThreadParent = vi.fn();
     const pendingInterruptsRef = { current: new Set<string>() };
     const planByThreadRef = {
       current: {} as Record<string, TurnPlan | null>,
@@ -340,6 +385,7 @@ describe("useThreadTurnEvents", () => {
         pushThreadErrorMessage,
         safeMessageActivity,
         recordThreadActivity,
+        updateThreadParent,
       }),
     );
 

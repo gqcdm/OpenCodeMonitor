@@ -36,6 +36,7 @@ type ThreadEventHandlersOptions = {
     threadId: string,
     item: Record<string, unknown>,
   ) => void;
+  updateThreadParent: (parentId: string, childIds: string[]) => void;
   onReviewExited?: (workspaceId: string, threadId: string) => void;
   approvalAllowlistRef: MutableRefObject<Record<string, string[][]>>;
   pendingInterruptsRef: MutableRefObject<Set<string>>;
@@ -58,6 +59,7 @@ export function useThreadEventHandlers({
   onDebug,
   onWorkspaceConnected,
   applyCollabThreadLinks,
+  updateThreadParent,
   onReviewExited,
   approvalAllowlistRef,
   pendingInterruptsRef,
@@ -116,6 +118,7 @@ export function useThreadEventHandlers({
     pushThreadErrorMessage,
     safeMessageActivity,
     recordThreadActivity,
+    updateThreadParent,
   });
 
   const onBackgroundThreadAction = useCallback(

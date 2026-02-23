@@ -26,7 +26,6 @@ type UseThreadSelectionHandlersOrchestrationParams = {
   appSettingsLoading: boolean;
   setAppSettings: SetState<AppSettings>;
   queueSaveSettings: (next: AppSettings) => Promise<AppSettings | void>;
-  activeThreadIdRef: MutableRefObject<string | null>;
   setSelectedModelId: (id: string | null) => void;
   setSelectedEffort: (effort: string | null) => void;
   setSelectedCollaborationModeId: (id: string | null) => void;
@@ -216,7 +215,6 @@ export function useThreadSelectionHandlersOrchestration({
   appSettingsLoading,
   setAppSettings,
   queueSaveSettings,
-  activeThreadIdRef,
   setSelectedModelId,
   setSelectedEffort,
   setSelectedCollaborationModeId,
@@ -226,8 +224,10 @@ export function useThreadSelectionHandlersOrchestration({
   const handleSelectModel = useCallback(
     (id: string | null) => {
       setSelectedModelId(id);
-      const hasActiveThread = Boolean(activeThreadIdRef.current);
-      if (!appSettingsLoading && !hasActiveThread) {
+      // Always update lastComposerModelId to track the "last used model" for new sessions,
+      // regardless of whether there's an active thread. Per-session model is separately
+      // persisted in ThreadCodexParams.
+      if (!appSettingsLoading) {
         setAppSettings((current) => {
           if (current.lastComposerModelId === id) {
             return current;
@@ -240,7 +240,6 @@ export function useThreadSelectionHandlersOrchestration({
       persistThreadCodexParams({ modelId: id });
     },
     [
-      activeThreadIdRef,
       appSettingsLoading,
       persistThreadCodexParams,
       queueSaveSettings,
@@ -253,8 +252,8 @@ export function useThreadSelectionHandlersOrchestration({
     (raw: string | null) => {
       const next = typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
       setSelectedEffort(next);
-      const hasActiveThread = Boolean(activeThreadIdRef.current);
-      if (!appSettingsLoading && !hasActiveThread) {
+      // Always update lastComposerReasoningEffort to track the "last used effort" for new sessions.
+      if (!appSettingsLoading) {
         setAppSettings((current) => {
           if (current.lastComposerReasoningEffort === next) {
             return current;
@@ -267,7 +266,6 @@ export function useThreadSelectionHandlersOrchestration({
       persistThreadCodexParams({ effort: next });
     },
     [
-      activeThreadIdRef,
       appSettingsLoading,
       persistThreadCodexParams,
       queueSaveSettings,

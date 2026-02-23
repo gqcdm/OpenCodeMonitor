@@ -103,6 +103,11 @@ impl SessionTranslationState {
         format!("item_{n}")
     }
 
+    fn next_turn_id(&self) -> String {
+        let n = self.item_counter.fetch_add(1, Ordering::SeqCst);
+        format!("turn_rest_{n}")
+    }
+
     /// Start a new turn for a specific session.
     pub(crate) fn start_turn(&mut self, session_id: String, turn_id: String) {
         self.session_id = session_id.clone();
@@ -167,6 +172,18 @@ impl SessionTranslationState {
     fn reset_agent_message_item(&mut self, session_id: &str) {
         let turn_state = self.get_turn_state_mut(session_id);
         turn_state.agent_message_item_id = None;
+    }
+
+    fn finish_turn(&mut self, session_id: &str) {
+        if let Some(turn_state) = self.session_turns.get_mut(session_id) {
+            turn_state.turn_id.clear();
+            turn_state.tool_call_items.clear();
+            turn_state.agent_message_item_id = None;
+            turn_state.reasoning_item_id = None;
+            turn_state.reasoning_part_id = None;
+        }
+        self.user_message_item_id = None;
+        self.user_message_text.clear();
     }
 
     pub(crate) fn user_message_item(&mut self) -> String {
@@ -274,6 +291,8 @@ pub(crate) fn translate_sse_event(
         "message.part.updated" => translate_part_updated(properties, state),
         "message.part.delta" => translate_part_delta(properties, state),
         "message.updated" => translate_message_updated(properties, state),
+        "session.created" => translate_session_created_or_updated(properties, state, true),
+        "session.updated" => translate_session_created_or_updated(properties, state, true),
         "session.status" => translate_session_status(properties, state),
         "session.idle" => translate_session_idle(properties, state),
         "permission.updated" => translate_sse_permission(properties, state),
@@ -282,8 +301,6 @@ pub(crate) fn translate_sse_event(
         "question.rejected" => translate_question_completed(properties),
         "server.heartbeat"
         | "file.watcher.updated"
-        | "session.created"
-        | "session.updated"
         | "session.deleted"
         | "session.diff"
         | "config.updated" => vec![],
@@ -293,6 +310,119 @@ pub(crate) fn translate_sse_event(
             vec![]
         }
     }
+}
+
+fn session_record_from_properties<'a>(properties: &'a Value) -> Option<&'a Value> {
+    if let Some(session) = properties.get("session") {
+        Some(session)
+    } else if properties.get("id").is_some() {
+        Some(properties)
+    } else {
+        None
+    }
+}
+
+fn session_id_from_record(session: &Value) -> String {
+    session
+        .get("id")
+        .or_else(|| session.get("sessionID"))
+        .or_else(|| session.get("sessionId"))
+        .or_else(|| session.get("session_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn session_title_from_record(session: &Value) -> String {
+    session
+        .get("title")
+        .or_else(|| session.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn session_parent_id_from_record(session: &Value) -> Option<String> {
+    session
+        .get("parentID")
+        .or_else(|| session.get("parentId"))
+        .or_else(|| session.get("parent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn session_updated_at_from_record(session: &Value) -> Value {
+    session
+        .get("updatedAt")
+        .or_else(|| session.get("updated_at"))
+        .or_else(|| session.get("time").and_then(|time| time.get("updated")))
+        .or_else(|| session.get("time").and_then(|time| time.get("updatedAt")))
+        .or_else(|| session.get("time").and_then(|time| time.get("updated_at")))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn session_created_at_from_record(session: &Value) -> Value {
+    session
+        .get("createdAt")
+        .or_else(|| session.get("created_at"))
+        .or_else(|| session.get("time").and_then(|time| time.get("created")))
+        .or_else(|| session.get("time").and_then(|time| time.get("createdAt")))
+        .or_else(|| session.get("time").and_then(|time| time.get("created_at")))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn translate_session_created_or_updated(
+    properties: &Value,
+    state: &mut SessionTranslationState,
+    emit_thread_started: bool,
+) -> Vec<Value> {
+    let Some(session) = session_record_from_properties(properties) else {
+        return vec![];
+    };
+    let thread_id = session_id_from_record(session);
+    if thread_id.is_empty() {
+        return vec![];
+    }
+
+    state.session_id = thread_id.clone();
+    let title = session_title_from_record(session);
+    let mut events = Vec::new();
+
+    if emit_thread_started {
+        let mut thread = json!({
+            "id": thread_id,
+            "preview": title,
+            "updatedAt": session_updated_at_from_record(session),
+            "createdAt": session_created_at_from_record(session),
+        });
+        if let Some(parent_id) = session_parent_id_from_record(session) {
+            thread["parentId"] = json!(parent_id);
+        }
+        events.push(json!({
+            "method": "thread/started",
+            "params": {
+                "thread": thread
+            }
+        }));
+    }
+
+    if !title.is_empty() {
+        events.push(json!({
+            "method": "thread/name/updated",
+            "params": {
+                "threadId": thread_id,
+                "threadName": title
+            }
+        }));
+    }
+
+    events
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +603,45 @@ fn translate_tool_part(
     let item_type = tool_kind_to_item_type(tool_name);
     let raw_input = tool_state.get("input").cloned();
 
+    // For explore items, use the title field from OpenCode (relative path for read,
+    // pattern for grep, etc.) or fall back to extracting from input
+    let title = tool_state
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
     let mut events = Vec::new();
+
+    // Handle explore-type tools (read, grep, glob, list) specially
+    if item_type == "explore" {
+        let explore_status = match status {
+            "pending" | "running" => "exploring",
+            _ => "explored",
+        };
+        let entry = build_explore_entry(tool_name, title, raw_input.as_ref());
+        let item = json!({
+            "id": item_id,
+            "type": "explore",
+            "status": explore_status,
+            "entries": [entry]
+        });
+        let method = if status == "completed" || status == "error" {
+            "item/completed"
+        } else {
+            "item/started"
+        };
+        events.push(json!({
+            "method": method,
+            "params": {
+                "threadId": thread_id,
+                "item": item
+            }
+        }));
+        if status == "completed" || status == "error" {
+            state.reset_agent_message_item(thread_id);
+        }
+        return events;
+    }
 
     match status {
         "pending" | "running" => {
@@ -563,6 +731,78 @@ fn translate_tool_part(
     }
 
     events
+}
+
+fn build_explore_entry(tool_name: &str, title: &str, raw_input: Option<&Value>) -> Value {
+    let kind = tool_to_explore_kind(tool_name);
+
+    // For read: title is the relative path (e.g., "src/foo.ts")
+    // For grep: title is the pattern (e.g., "useState")
+    // For glob/list: title is the search path (e.g., "src")
+    let (label, detail) = match tool_name {
+        "read" => {
+            // Extract filename from path for label, full path as detail
+            let path = if !title.is_empty() {
+                title
+            } else {
+                raw_input
+                    .and_then(|i| i.get("filePath"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("file")
+            };
+            let filename = path.rsplit('/').next().unwrap_or(path);
+            if filename == path {
+                (path.to_string(), None)
+            } else {
+                (filename.to_string(), Some(path.to_string()))
+            }
+        }
+        "grep" => {
+            // Title is the pattern, optionally add path context from input
+            let pattern = if !title.is_empty() {
+                title.to_string()
+            } else {
+                raw_input
+                    .and_then(|i| i.get("pattern"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("pattern")
+                    .to_string()
+            };
+            let path = raw_input
+                .and_then(|i| i.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let label = if !path.is_empty() {
+                format!("{} in {}", pattern, path)
+            } else {
+                pattern
+            };
+            (label, None)
+        }
+        "glob" | "list" | "ls" => {
+            // Title is the search path
+            let path = if !title.is_empty() {
+                title.to_string()
+            } else {
+                raw_input
+                    .and_then(|i| i.get("path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".")
+                    .to_string()
+            };
+            (path, None)
+        }
+        _ => (title.to_string(), None),
+    };
+
+    let mut entry = json!({
+        "kind": kind,
+        "label": label
+    });
+    if let Some(d) = detail {
+        entry["detail"] = json!(d);
+    }
+    entry
 }
 
 // ---------------------------------------------------------------------------
@@ -672,6 +912,8 @@ fn translate_message_updated(
 fn translate_session_status(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
     let session_id = properties
         .get("sessionID")
+        .or_else(|| properties.get("session_id"))
+        .or_else(|| properties.get("id"))
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     if !session_id.is_empty() {
@@ -691,17 +933,25 @@ fn translate_session_status(properties: &Value, state: &mut SessionTranslationSt
         .unwrap_or_default();
 
     match status {
-        "idle" => {
-            if !turn_id.is_empty() {
-                let mut events = Vec::new();
-                if let Some(msg_completed) = build_agent_message_completed(state, &thread_id) {
-                    events.push(msg_completed);
-                }
-                events.push(build_turn_completed(&thread_id, &turn_id));
-                events
-            } else {
-                vec![]
+        "active" | "running" | "busy" => {
+            if thread_id.is_empty() || !turn_id.is_empty() {
+                return vec![];
             }
+            let synthetic_turn_id = state.next_turn_id();
+            state.start_turn(thread_id.clone(), synthetic_turn_id.clone());
+            vec![build_turn_started(&thread_id, &synthetic_turn_id)]
+        }
+        "idle" => {
+            if turn_id.is_empty() {
+                return vec![];
+            }
+            let mut events = Vec::new();
+            if let Some(msg_completed) = build_agent_message_completed(state, &thread_id) {
+                events.push(msg_completed);
+            }
+            events.push(build_turn_completed(&thread_id, &turn_id));
+            state.finish_turn(&thread_id);
+            events
         }
         "error" => {
             let error_msg = properties
@@ -709,7 +959,7 @@ fn translate_session_status(properties: &Value, state: &mut SessionTranslationSt
                 .and_then(|s| s.get("message"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown error");
-            vec![json!({
+            let events = vec![json!({
                 "method": "error",
                 "params": {
                     "threadId": thread_id,
@@ -719,7 +969,9 @@ fn translate_session_status(properties: &Value, state: &mut SessionTranslationSt
                         "message": error_msg
                     }
                 }
-            })]
+            })];
+            state.finish_turn(&thread_id);
+            events
         }
         _ => vec![],
     }
@@ -757,6 +1009,7 @@ fn translate_session_idle(properties: &Value, state: &mut SessionTranslationStat
     }
     // Emit turn/completed even if turn_id is empty - background prompts don't track turns
     events.push(build_turn_completed(&thread_id, &turn_id));
+    state.finish_turn(&thread_id);
     events
 }
 
@@ -991,7 +1244,18 @@ fn tool_kind_to_item_type(kind: &str) -> &str {
     match kind {
         "edit" | "write" | "create" => "fileChange",
         "bash" | "command" | "terminal" => "commandExecution",
+        "read" | "grep" | "glob" | "list" | "ls" => "explore",
         _ => "commandExecution",
+    }
+}
+
+/// Map OpenCode tool names to explore entry kinds.
+fn tool_to_explore_kind(tool_name: &str) -> &str {
+    match tool_name {
+        "read" => "read",
+        "grep" => "search",
+        "glob" | "list" | "ls" => "list",
+        _ => "run",
     }
 }
 
@@ -1418,6 +1682,75 @@ mod tests {
     }
 
     #[test]
+    fn session_status_active_produces_turn_started_when_missing() {
+        let mut state = SessionTranslationState::new(String::new());
+        let event = json!({
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses_subagent_1",
+                "status": { "type": "active" }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "turn/started");
+        assert_eq!(events[0]["params"]["threadId"], "ses_subagent_1");
+        assert!(events[0]["params"]["turn"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("turn_rest_"));
+    }
+
+    #[test]
+    fn session_status_active_is_ignored_when_turn_already_active() {
+        let mut state = SessionTranslationState::new(String::new());
+        state.start_turn("ses_subagent_1".into(), "turn_existing".into());
+        let event = json!({
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses_subagent_1",
+                "status": { "type": "active" }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn session_created_emits_thread_started_and_name_with_parent() {
+        let mut state = SessionTranslationState::new(String::new());
+        let event = json!({
+            "type": "session.created",
+            "properties": {
+                "session": {
+                    "id": "ses_child",
+                    "title": "Explore session handling (subagent)",
+                    "parentID": "ses_parent",
+                    "updatedAt": 1700000000
+                }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["method"], "thread/started");
+        assert_eq!(events[0]["params"]["thread"]["id"], "ses_child");
+        assert_eq!(events[0]["params"]["thread"]["parentId"], "ses_parent");
+        assert_eq!(
+            events[0]["params"]["thread"]["preview"],
+            "Explore session handling (subagent)"
+        );
+        assert_eq!(events[1]["method"], "thread/name/updated");
+        assert_eq!(events[1]["params"]["threadId"], "ses_child");
+        assert_eq!(
+            events[1]["params"]["threadName"],
+            "Explore session handling (subagent)"
+        );
+    }
+
+    #[test]
     fn concurrent_sessions_get_correct_turn_ids() {
         let mut state = SessionTranslationState::new(String::new());
 
@@ -1645,5 +1978,125 @@ mod tests {
         });
         let events = translate_sse_event(&event, &mut state);
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn read_tool_produces_explore_item() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_read_1",
+                    "sessionID": "ses_test123",
+                    "tool": "read",
+                    "state": {
+                        "status": "completed",
+                        "title": "src/utils/foo.ts",
+                        "input": { "filePath": "src/utils/foo.ts" },
+                        "output": "file contents..."
+                    }
+                }
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/completed");
+        let item = &events[0]["params"]["item"];
+        assert_eq!(item["type"], "explore");
+        assert_eq!(item["status"], "explored");
+        let entries = item["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["kind"], "read");
+        assert_eq!(entries[0]["label"], "foo.ts");
+        assert_eq!(entries[0]["detail"], "src/utils/foo.ts");
+    }
+
+    #[test]
+    fn grep_tool_produces_explore_item_with_search_kind() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_grep_1",
+                    "sessionID": "ses_test123",
+                    "tool": "grep",
+                    "state": {
+                        "status": "completed",
+                        "title": "useState",
+                        "input": { "pattern": "useState", "path": "src" },
+                        "output": "matches..."
+                    }
+                }
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        let item = &events[0]["params"]["item"];
+        assert_eq!(item["type"], "explore");
+        let entries = item["entries"].as_array().unwrap();
+        assert_eq!(entries[0]["kind"], "search");
+        assert_eq!(entries[0]["label"], "useState in src");
+    }
+
+    #[test]
+    fn glob_tool_produces_explore_item_with_list_kind() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_glob_1",
+                    "sessionID": "ses_test123",
+                    "tool": "glob",
+                    "state": {
+                        "status": "running",
+                        "title": "src/components",
+                        "input": { "path": "src/components" }
+                    }
+                }
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/started");
+        let item = &events[0]["params"]["item"];
+        assert_eq!(item["type"], "explore");
+        assert_eq!(item["status"], "exploring");
+        let entries = item["entries"].as_array().unwrap();
+        assert_eq!(entries[0]["kind"], "list");
+        assert_eq!(entries[0]["label"], "src/components");
+    }
+
+    #[test]
+    fn list_tool_produces_explore_item() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_list_1",
+                    "sessionID": "ses_test123",
+                    "tool": "list",
+                    "state": {
+                        "status": "completed",
+                        "title": ".",
+                        "input": {},
+                        "output": "files..."
+                    }
+                }
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        let item = &events[0]["params"]["item"];
+        assert_eq!(item["type"], "explore");
+        let entries = item["entries"].as_array().unwrap();
+        assert_eq!(entries[0]["kind"], "list");
+        assert_eq!(entries[0]["label"], ".");
     }
 }

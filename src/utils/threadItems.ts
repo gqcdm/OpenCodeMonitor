@@ -651,6 +651,25 @@ export function buildConversationItem(
       durationMs,
     };
   }
+  if (type === "explore") {
+    const rawStatus = asString(item.status ?? "");
+    const status: "exploring" | "explored" =
+      rawStatus === "exploring" ? "exploring" : "explored";
+    const rawEntries = Array.isArray(item.entries) ? item.entries : [];
+    const entries = rawEntries
+      .map((entry) => {
+        const kind = asString(entry?.kind ?? "");
+        const label = asString(entry?.label ?? "");
+        const detail = entry?.detail ? asString(entry.detail) : undefined;
+        if (!kind || !label) return null;
+        if (kind !== "read" && kind !== "search" && kind !== "list" && kind !== "run") {
+          return null;
+        }
+        return { kind: kind as "read" | "search" | "list" | "run", label, detail };
+      })
+      .filter((e): e is NonNullable<typeof e> => e !== null);
+    return { id, kind: "explore", status, entries };
+  }
   if (type === "fileChange") {
     const changes = Array.isArray(item.changes) ? item.changes : [];
     const normalizedChanges = changes

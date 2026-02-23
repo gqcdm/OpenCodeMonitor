@@ -3,6 +3,7 @@ import type { Dispatch, MutableRefObject } from "react";
 import type { TurnPlan } from "@/types";
 import { interruptTurn as interruptTurnService } from "@services/tauri";
 import { getThreadTimestamp } from "@utils/threadItems";
+import { getParentThreadIdFromSource } from "@threads/utils/threadRpc";
 import {
   asString,
   normalizePlanUpdate,
@@ -23,6 +24,7 @@ type UseThreadTurnEventsOptions = {
   pushThreadErrorMessage: (threadId: string, message: string) => void;
   safeMessageActivity: () => void;
   recordThreadActivity: (workspaceId: string, threadId: string, timestamp?: number) => void;
+  updateThreadParent: (parentId: string, childIds: string[]) => void;
 };
 
 export function useThreadTurnEvents({
@@ -37,6 +39,7 @@ export function useThreadTurnEvents({
   pushThreadErrorMessage,
   safeMessageActivity,
   recordThreadActivity,
+  updateThreadParent,
 }: UseThreadTurnEventsOptions) {
   const shouldClearCompletedPlan = useCallback((threadId: string, turnId: string) => {
     const plan = planByThreadRef.current[threadId];
@@ -59,6 +62,12 @@ export function useThreadTurnEvents({
         return;
       }
       dispatch({ type: "ensureThread", workspaceId, threadId });
+      const sourceParentId = getParentThreadIdFromSource(thread.source);
+      const directParentId = asString(thread.parentId ?? thread.parent_id).trim();
+      const resolvedParentId = sourceParentId ?? (directParentId || null);
+      if (resolvedParentId) {
+        updateThreadParent(resolvedParentId, [threadId]);
+      }
       const timestamp = getThreadTimestamp(thread);
       const activityTimestamp = timestamp > 0 ? timestamp : Date.now();
       recordThreadActivity(workspaceId, threadId, activityTimestamp);
@@ -79,7 +88,14 @@ export function useThreadTurnEvents({
       }
       safeMessageActivity();
     },
-    [dispatch, getCustomName, isThreadHidden, recordThreadActivity, safeMessageActivity],
+    [
+      dispatch,
+      getCustomName,
+      isThreadHidden,
+      recordThreadActivity,
+      safeMessageActivity,
+      updateThreadParent,
+    ],
   );
 
   const onThreadNameUpdated = useCallback(

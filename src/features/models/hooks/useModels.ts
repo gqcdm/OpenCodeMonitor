@@ -401,6 +401,7 @@ export function useModels({
   }, [
     configModel,
     models,
+    preferredEffort,
     preferredModelId,
     selectedEffort,
     selectedModelId,

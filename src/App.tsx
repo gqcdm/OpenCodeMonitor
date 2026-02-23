@@ -423,7 +423,6 @@ function MainApp() {
     appSettingsLoading,
     setAppSettings,
     queueSaveSettings,
-    activeThreadIdRef,
     setSelectedModelId,
     setSelectedEffort,
     setSelectedCollaborationModeId,
