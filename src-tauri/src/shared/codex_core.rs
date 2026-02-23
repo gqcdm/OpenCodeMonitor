@@ -739,9 +739,13 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
     let requested_model = normalize_optional_string(model);
     let requested_effort = normalize_optional_string(effort);
     if let Some(ref model_id) = requested_model {
-        // REST API accepts model as { providerID, modelID } but modelID alone
-        // may work depending on the server version. Include both fields.
-        body["model"] = json!({ "modelID": model_id });
+        // REST API requires model as { providerID, modelID }.
+        // The frontend sends a qualified "provider/model" string.
+        if let Some((provider, mid)) = model_id.split_once('/') {
+            body["model"] = json!({ "providerID": provider, "modelID": mid });
+        } else {
+            body["model"] = json!({ "modelID": model_id });
+        }
     }
     if let Some(ref effort_level) = requested_effort {
         body["effort"] = json!(effort_level);
@@ -880,13 +884,31 @@ pub(crate) async fn model_list_core(
                 .to_string();
             let qualified_id = format!("{provider_id}/{model_id}");
             let is_default = model_id == default_for_provider;
+
+            // Variants keys are reasoning effort levels (e.g. "low", "medium", "high", "max").
+            let variants = model
+                .get("variants")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            let efforts: Vec<Value> = variants
+                .keys()
+                .map(|k| json!({ "reasoningEffort": k, "description": "" }))
+                .collect();
+            let default_effort = ["medium", "high"]
+                .iter()
+                .find(|e| variants.contains_key(**e))
+                .map(|e| json!(e))
+                .unwrap_or(json!(null));
+
             data.push(json!({
                 "id": qualified_id,
                 "model": model_id,
+                "provider": provider_id,
                 "displayName": display_name,
                 "description": "",
-                "supportedReasoningEfforts": [],
-                "defaultReasoningEffort": null,
+                "supportedReasoningEfforts": efforts,
+                "defaultReasoningEffort": default_effort,
                 "isDefault": is_default,
             }));
         }

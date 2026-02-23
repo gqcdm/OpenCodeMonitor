@@ -9,6 +9,7 @@ import type {
   WorkspaceInfo,
 } from "@/types";
 import { FileEditorCard } from "@/features/shared/components/FileEditorCard";
+import { groupModelsByProvider } from "@/features/models/utils/groupModelsByProvider";
 
 type SettingsCodexSectionProps = {
   appSettings: AppSettings;
@@ -169,6 +170,7 @@ export function SettingsCodexSection({
   onUpdateWorkspaceCodexBin,
   onUpdateWorkspaceSettings,
 }: SettingsCodexSectionProps) {
+  const groupedDefaultModels = useMemo(() => groupModelsByProvider(defaultModels), [defaultModels]);
   const latestModelSlug = defaultModels[0]?.model ?? null;
   const savedModelSlug = useMemo(
     () => coerceSavedModelSlug(appSettings.lastComposerModelId, defaultModels),
@@ -438,11 +440,23 @@ export function SettingsCodexSection({
             }
             aria-label="Model"
           >
-            {defaultModels.map((model) => (
-              <option key={model.model} value={model.model}>
-                {model.displayName?.trim() || model.model}
-              </option>
-            ))}
+            {groupedDefaultModels.map((group) =>
+              group.label ? (
+                <optgroup key={group.provider} label={group.label}>
+                  {group.models.map((model) => (
+                    <option key={model.model} value={model.model}>
+                      {model.displayName?.trim() || model.model}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : (
+                group.models.map((model) => (
+                  <option key={model.model} value={model.model}>
+                    {model.displayName?.trim() || model.model}
+                  </option>
+                ))
+              ),
+            )}
           </select>
           <button
             type="button"

@@ -215,9 +215,13 @@ export function useModels({
         if (hasConfigModel) {
           return dataFromServer;
         }
+        const configProvider = configModelFromConfig.includes("/")
+          ? configModelFromConfig.split("/")[0]
+          : "";
         const configOption: ModelOption = {
           id: configModelFromConfig,
           model: configModelFromConfig,
+          provider: configProvider,
           displayName: `${configModelFromConfig} (config)`,
           description: CONFIG_MODEL_DESCRIPTION,
           supportedReasoningEfforts: [],

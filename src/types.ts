@@ -587,6 +587,7 @@ export type AppMention = {
 export type ModelOption = {
   id: string;
   model: string;
+  provider: string;
   displayName: string;
   description: string;
   supportedReasoningEfforts: { reasoningEffort: string; description: string }[];

@@ -26,6 +26,8 @@ pub(crate) struct SessionTranslationState {
     agent_message_item_id: Option<String>,
     /// Stable item ID for the current reasoning stream.
     reasoning_item_id: Option<String>,
+    /// OpenCode part ID for the current reasoning part (used to route `message.part.delta` events).
+    reasoning_part_id: Option<String>,
     /// Stable item ID for contiguous user-message chunk streams.
     pub(crate) user_message_item_id: Option<String>,
     /// Buffered text for contiguous user-message chunk streams.
@@ -41,6 +43,7 @@ impl SessionTranslationState {
             tool_call_items: HashMap::new(),
             agent_message_item_id: None,
             reasoning_item_id: None,
+            reasoning_part_id: None,
             user_message_item_id: None,
             user_message_text: String::new(),
         }
@@ -58,6 +61,7 @@ impl SessionTranslationState {
         self.tool_call_items.clear();
         self.agent_message_item_id = None;
         self.reasoning_item_id = None;
+        self.reasoning_part_id = None;
         self.user_message_item_id = None;
         self.user_message_text.clear();
     }
@@ -69,6 +73,7 @@ impl SessionTranslationState {
         self.tool_call_items.clear();
         self.agent_message_item_id = None;
         self.reasoning_item_id = None;
+        self.reasoning_part_id = None;
         self.user_message_item_id = None;
         self.user_message_text.clear();
     }
@@ -107,6 +112,7 @@ impl SessionTranslationState {
         self.tool_call_items.clear();
         self.agent_message_item_id = None;
         self.reasoning_item_id = None;
+        self.reasoning_part_id = None;
     }
 }
 
@@ -132,6 +138,7 @@ pub(crate) fn translate_sse_event(
 
     match event_type {
         "message.part.updated" => translate_part_updated(properties, state),
+        "message.part.delta" => translate_part_delta(properties, state),
         "message.updated" => translate_message_updated(properties, state),
         "session.status" => translate_session_status(properties, state),
         "permission.updated" => translate_sse_permission(properties, state),
@@ -201,6 +208,11 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
         }
 
         "reasoning" => {
+            // Track the OpenCode part ID so `message.part.delta` events can be
+            // routed to reasoning vs text.
+            if let Some(pid) = part.get("id").and_then(|v| v.as_str()) {
+                state.reasoning_part_id = Some(pid.to_string());
+            }
             if delta.is_empty() {
                 return vec![];
             }
@@ -218,6 +230,66 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
 
         "tool" => translate_tool_part(part, state, &thread_id),
 
+        _ => vec![],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// message.part.delta — incremental text/reasoning streaming chunks
+// ---------------------------------------------------------------------------
+
+fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+    let delta = match properties.get("delta").and_then(|v| v.as_str()) {
+        Some(d) if !d.is_empty() => d,
+        _ => return vec![],
+    };
+
+    if let Some(sid) = properties.get("sessionID").and_then(|v| v.as_str()) {
+        if !sid.is_empty() {
+            state.session_id = sid.to_string();
+        }
+    }
+
+    let field = properties
+        .get("field")
+        .and_then(|v| v.as_str())
+        .unwrap_or("text");
+    let thread_id = state.session_id.clone();
+    let turn_id = state.current_turn_id.clone();
+
+    match field {
+        "text" => {
+            let part_id = properties
+                .get("partID")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+
+            if let Some(ref reasoning_part_id) = state.reasoning_part_id {
+                if part_id == reasoning_part_id {
+                    let item_id = state.reasoning_item();
+                    return vec![json!({
+                        "method": "item/reasoning/textDelta",
+                        "params": {
+                            "threadId": thread_id,
+                            "turnId": turn_id,
+                            "itemId": item_id,
+                            "delta": delta
+                        }
+                    })];
+                }
+            }
+
+            let item_id = state.agent_message_item();
+            vec![json!({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "itemId": item_id,
+                    "delta": delta
+                }
+            })]
+        }
         _ => vec![],
     }
 }
@@ -362,24 +434,36 @@ fn translate_message_updated(
         Some(i) => i,
         None => return vec![],
     };
+
+    if let Some(sid) = info.get("sessionID").and_then(|v| v.as_str()) {
+        if !sid.is_empty() {
+            state.session_id = sid.to_string();
+        }
+    }
+
     let thread_id = state.session_id.clone();
 
-    // Extract token usage from message info if available.
-    let input_tokens = info
-        .get("inputTokens")
+    // Token usage: try nested `tokens` object first (current format), then flat keys (legacy).
+    let tokens = info.get("tokens");
+    let input_tokens = tokens
+        .and_then(|t| t.get("input"))
+        .or_else(|| info.get("inputTokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let output_tokens = info
-        .get("outputTokens")
+    let output_tokens = tokens
+        .and_then(|t| t.get("output"))
+        .or_else(|| info.get("outputTokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let cached_tokens = info
-        .get("cachedInputTokens")
+    let cached_tokens = tokens
+        .and_then(|t| t.get("cache").and_then(|c| c.get("read")))
+        .or_else(|| info.get("cachedInputTokens"))
         .or_else(|| info.get("cacheReadInputTokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let reasoning_tokens = info
-        .get("reasoningOutputTokens")
+    let reasoning_tokens = tokens
+        .and_then(|t| t.get("reasoning"))
+        .or_else(|| info.get("reasoningOutputTokens"))
         .or_else(|| info.get("reasoningTokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
@@ -952,5 +1036,114 @@ mod tests {
         });
         let events = translate_sse_event(&event, &mut state);
         assert_eq!(events[0]["params"]["delta"], " line with trailing space ");
+    }
+
+    #[test]
+    fn part_delta_text_produces_agent_message_delta() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_1",
+                "partID": "prt_text_1",
+                "field": "text",
+                "delta": "hello"
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/agentMessage/delta");
+        assert_eq!(events[0]["params"]["threadId"], "ses_test123");
+        assert_eq!(events[0]["params"]["delta"], "hello");
+    }
+
+    #[test]
+    fn part_delta_routes_reasoning_by_part_id() {
+        let mut state = make_state();
+
+        // First, announce a reasoning part via message.part.updated.
+        let reasoning_announce = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "reasoning",
+                    "id": "prt_reasoning_1",
+                    "sessionID": "ses_test123",
+                    "text": ""
+                }
+            }
+        });
+        translate_sse_event(&reasoning_announce, &mut state);
+
+        // Now a delta for that reasoning part should produce reasoning event.
+        let delta_event = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "partID": "prt_reasoning_1",
+                "field": "text",
+                "delta": "thinking..."
+            }
+        });
+        let events = translate_sse_event(&delta_event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/reasoning/textDelta");
+        assert_eq!(events[0]["params"]["delta"], "thinking...");
+    }
+
+    #[test]
+    fn nested_token_format_produces_token_usage() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "sessionID": "ses_test123",
+                    "tokens": {
+                        "total": 6000,
+                        "input": 5000,
+                        "output": 1000,
+                        "reasoning": 50,
+                        "cache": { "read": 200, "write": 0 }
+                    }
+                }
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "thread/tokenUsage/updated");
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["total"]["inputTokens"],
+            5000
+        );
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["total"]["outputTokens"],
+            1000
+        );
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["total"]["cachedInputTokens"],
+            200
+        );
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["total"]["reasoningOutputTokens"],
+            50
+        );
+    }
+
+    #[test]
+    fn part_delta_empty_delta_returns_empty() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "partID": "prt_1",
+                "field": "text",
+                "delta": ""
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert!(events.is_empty());
     }
 }

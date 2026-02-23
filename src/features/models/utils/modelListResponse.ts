@@ -81,9 +81,18 @@ export function parseModelListResponse(response: unknown): ModelOption[] {
         return null;
       }
       const record = item as Record<string, unknown>;
+      const id = String(record.id ?? record.model ?? "");
+      const explicitProvider = record.provider ?? record.provider_id;
+      const provider =
+        typeof explicitProvider === "string" && explicitProvider.length > 0
+          ? explicitProvider
+          : id.includes("/")
+            ? id.split("/")[0]
+            : "";
       return {
-        id: String(record.id ?? record.model ?? ""),
+        id,
         model: String(record.model ?? record.id ?? ""),
+        provider,
         displayName: String(record.displayName ?? record.display_name ?? record.model ?? ""),
         description: String(record.description ?? ""),
         supportedReasoningEfforts: parseReasoningEfforts(record),

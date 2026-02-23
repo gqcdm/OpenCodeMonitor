@@ -542,19 +542,25 @@ fn spawn_sse_reader<E: EventSink>(
                                     }
                                 };
 
-                                // Filter events by directory — only process events for this workspace.
+                                // OpenCode SSE format wraps events:
+                                //   { "directory": "...", "payload": { "type": "...", "properties": {...} } }
+                                // Extract directory from top level; unwrap payload for translation.
                                 let event_dir = value
-                                    .get("properties")
-                                    .and_then(|p| p.get("directory"))
+                                    .get("directory")
                                     .and_then(|d| d.as_str())
                                     .unwrap_or("");
                                 if !event_dir.is_empty() && event_dir != workspace_path {
                                     continue;
                                 }
 
+                                let payload = match value.get("payload") {
+                                    Some(p) => p,
+                                    None => &value, // fallback: treat top-level as payload
+                                };
+
                                 let translated = {
                                     let mut ts = session.translation_state.lock().await;
-                                    event_translator::translate_sse_event(&value, &mut ts)
+                                    event_translator::translate_sse_event(payload, &mut ts)
                                 };
 
                                 for translated_msg in translated {

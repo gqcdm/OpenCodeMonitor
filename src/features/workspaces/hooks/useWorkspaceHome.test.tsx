@@ -31,8 +31,9 @@ const worktreeWorkspace: WorkspaceInfo = {
 
 const models: ModelOption[] = [
   {
-    id: "id-1",
+    id: "openai/gpt-5.1-max",
     model: "gpt-5.1-max",
+    provider: "openai",
     displayName: "GPT-5.1 Max",
     description: "Test model",
     supportedReasoningEfforts: [
@@ -70,7 +71,7 @@ describe("useWorkspaceHome", () => {
 
     act(() => {
       result.current.setRunMode("worktree");
-      result.current.toggleModelSelection("id-1");
+      result.current.toggleModelSelection("openai/gpt-5.1-max");
       result.current.setDraft("Hello worktree");
     });
 
@@ -101,7 +102,7 @@ describe("useWorkspaceHome", () => {
       useWorkspaceHome({
         activeWorkspace: workspace,
         models,
-        selectedModelId: "id-1",
+        selectedModelId: "openai/gpt-5.1-max",
         addWorktreeAgent,
         connectWorkspace,
         startThreadForWorkspace,
@@ -189,8 +190,8 @@ describe("useWorkspaceHome", () => {
 
     act(() => {
       result.current.setRunMode("worktree");
-      result.current.toggleModelSelection("id-1");
-      result.current.setModelCount("id-1", 2);
+      result.current.toggleModelSelection("openai/gpt-5.1-max");
+      result.current.setModelCount("openai/gpt-5.1-max", 2);
       result.current.setDraft("Hello");
     });
 
@@ -219,7 +220,7 @@ describe("useWorkspaceHome", () => {
       useWorkspaceHome({
         activeWorkspace: workspace,
         models,
-        selectedModelId: "id-1",
+        selectedModelId: "openai/gpt-5.1-max",
         addWorktreeAgent,
         connectWorkspace,
         startThreadForWorkspace,

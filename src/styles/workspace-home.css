@@ -203,6 +203,22 @@
   width: 190px !important;
 }
 
+.workspace-home-model-group + .workspace-home-model-group {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.workspace-home-model-group-label {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
 .workspace-home-model-option {
   position: relative;
   display: flex;

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ModelOption, WorkspaceInfo } from "../../../types";
 import type { WorkspaceRunMode } from "../hooks/useWorkspaceHome";
 import Laptop from "lucide-react/dist/esm/icons/laptop";
@@ -16,6 +16,7 @@ import {
   INSTANCE_OPTIONS,
   resolveModelLabel,
 } from "./workspaceHomeHelpers";
+import { groupModelsByProvider } from "../../models/utils/groupModelsByProvider";
 
 type WorkspaceHomeRunControlsProps = {
   workspaceKind: WorkspaceInfo["kind"];
@@ -56,6 +57,7 @@ export function WorkspaceHomeRunControls({
   reasoningSupported,
   isSubmitting,
 }: WorkspaceHomeRunControlsProps) {
+  const groupedModels = useMemo(() => groupModelsByProvider(models), [models]);
   const [runModeOpen, setRunModeOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const runModeRef = useRef<HTMLDivElement | null>(null);
@@ -189,60 +191,67 @@ export function WorkspaceHomeRunControls({
                 Connect this workspace to load available models.
               </div>
             )}
-            {models.map((model) => {
-              const isSelected =
-                runMode === "local"
-                  ? model.id === selectedModelId
-                  : Boolean(modelSelections[model.id]);
-              const count = modelSelections[model.id] ?? 1;
-              return (
-                <div
-                  key={model.id}
-                  className={`workspace-home-model-option${isSelected ? " is-active" : ""}`}
-                >
-                  <PopoverMenuItem
-                    className="open-app-option workspace-home-model-toggle"
-                    onClick={() => {
-                      if (runMode === "local") {
-                        onSelectModel(model.id);
-                        setModelsOpen(false);
-                        return;
-                      }
-                      onToggleModel(model.id);
-                    }}
-                    icon={<Cpu className="workspace-home-mode-icon" aria-hidden />}
-                    active={isSelected}
-                  >
-                    {resolveModelLabel(model)}
-                  </PopoverMenuItem>
-                  {runMode === "worktree" && (
-                    <>
-                      <div className="workspace-home-model-meta" aria-hidden>
-                        <span>{count}x</span>
-                        <ChevronRight size={14} />
-                      </div>
-                      <div className="workspace-home-model-submenu ds-popover">
-                        {INSTANCE_OPTIONS.map((option) => (
-                          <button
-                            key={option}
-                            type="button"
-                            className={`workspace-home-model-submenu-item${
-                              option === count ? " is-active" : ""
-                            }`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onModelCountChange(model.id, option);
-                            }}
-                          >
-                            {option}x
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
+            {groupedModels.map((group) => (
+              <div key={group.provider} className="workspace-home-model-group" role="group" aria-label={group.label}>
+                {groupedModels.length > 1 && (
+                  <div className="workspace-home-model-group-label">{group.label}</div>
+                )}
+                {group.models.map((model) => {
+                  const isSelected =
+                    runMode === "local"
+                      ? model.id === selectedModelId
+                      : Boolean(modelSelections[model.id]);
+                  const count = modelSelections[model.id] ?? 1;
+                  return (
+                    <div
+                      key={model.id}
+                      className={`workspace-home-model-option${isSelected ? " is-active" : ""}`}
+                    >
+                      <PopoverMenuItem
+                        className="open-app-option workspace-home-model-toggle"
+                        onClick={() => {
+                          if (runMode === "local") {
+                            onSelectModel(model.id);
+                            setModelsOpen(false);
+                            return;
+                          }
+                          onToggleModel(model.id);
+                        }}
+                        icon={<Cpu className="workspace-home-mode-icon" aria-hidden />}
+                        active={isSelected}
+                      >
+                        {resolveModelLabel(model)}
+                      </PopoverMenuItem>
+                      {runMode === "worktree" && (
+                        <>
+                          <div className="workspace-home-model-meta" aria-hidden>
+                            <span>{count}x</span>
+                            <ChevronRight size={14} />
+                          </div>
+                          <div className="workspace-home-model-submenu ds-popover">
+                            {INSTANCE_OPTIONS.map((option) => (
+                              <button
+                                key={option}
+                                type="button"
+                                className={`workspace-home-model-submenu-item${
+                                  option === count ? " is-active" : ""
+                                }`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onModelCountChange(model.id, option);
+                                }}
+                              >
+                                {option}x
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </PopoverSurface>
         )}
       </div>

@@ -1,6 +1,7 @@
-import type { CSSProperties } from "react";
+import { type CSSProperties, useMemo } from "react";
 import { BrainCog } from "lucide-react";
 import type { AccessMode, ThreadTokenUsage } from "../../../types";
+import { groupModelsByProvider } from "../../models/utils/groupModelsByProvider";
 
 type ComposerMetaBarProps = {
   disabled: boolean;
@@ -8,7 +9,7 @@ type ComposerMetaBarProps = {
   collaborationModes: { id: string; label: string }[];
   selectedCollaborationModeId: string | null;
   onSelectCollaborationMode: (id: string | null) => void;
-  models: { id: string; displayName: string; model: string }[];
+  models: { id: string; displayName: string; model: string; provider: string }[];
   selectedModelId: string | null;
   onSelectModel: (id: string) => void;
   reasoningOptions: string[];
@@ -37,6 +38,7 @@ export function ComposerMetaBar({
   onSelectAccessMode,
   contextUsage = null,
 }: ComposerMetaBarProps) {
+  const groupedModels = useMemo(() => groupModelsByProvider(models), [models]);
   const contextWindow = contextUsage?.modelContextWindow ?? null;
   const lastTokens = contextUsage?.last.totalTokens ?? 0;
   const totalTokens = contextUsage?.total.totalTokens ?? 0;
@@ -172,11 +174,23 @@ export function ComposerMetaBar({
             {models.length === 0 && (
               <option value="">{isConnected ? "Loading models..." : "No models"}</option>
             )}
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.displayName || model.model}
-              </option>
-            ))}
+            {groupedModels.map((group) =>
+              group.label ? (
+                <optgroup key={group.provider} label={group.label}>
+                  {group.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.displayName || model.model}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : (
+                group.models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.displayName || model.model}
+                  </option>
+                ))
+              ),
+            )}
           </select>
         </div>
         <div className="composer-select-wrap composer-select-wrap--effort">

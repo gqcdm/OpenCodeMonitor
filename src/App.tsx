@@ -487,7 +487,7 @@ function MainApp() {
     getWorkspacePromptsDir,
     getGlobalPromptsDir,
   } = useCustomPrompts({ activeWorkspace, onDebug: addDebugEntry });
-  const resolvedModel = selectedModel?.model ?? null;
+  const resolvedModel = selectedModel?.id ?? null;
   const resolvedEffort = reasoningSupported ? selectedEffort : null;
 
   const { collaborationModePayload } = useCollaborationModeSelection({
