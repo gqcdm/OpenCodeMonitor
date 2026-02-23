@@ -797,10 +797,73 @@ pub(crate) async fn turn_steer_core(
 }
 
 pub(crate) async fn collaboration_mode_list_core(
-    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    _workspace_id: String,
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
 ) -> Result<Value, String> {
-    Ok(json!({ "result": { "data": [] } }))
+    let session = get_session_clone(sessions, &workspace_id).await?;
+
+    let agents = match session.rest_get("/agent").await {
+        Ok(response) => response,
+        Err(_) => return Ok(json!({ "result": { "data": [] } })),
+    };
+
+    let agent_list = agents.as_array().cloned().unwrap_or_default();
+
+    let mut data: Vec<Value> = Vec::new();
+    for agent in &agent_list {
+        let name = agent
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+
+        // Skip hidden agents (compaction, title, summary).
+        let hidden = agent
+            .get("hidden")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if hidden {
+            continue;
+        }
+
+        // Skip subagents (explore, general) -- only show primary/all.
+        let agent_mode = agent
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("primary");
+        if agent_mode == "subagent" {
+            continue;
+        }
+
+        let description = agent
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        // Capitalize first letter for display label.
+        let label = {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => name.clone(),
+            }
+        };
+
+        data.push(json!({
+            "name": name,
+            "label": label,
+            "mode": name,
+            "description": description,
+            "settings": {},
+        }));
+    }
+
+    Ok(json!({ "result": { "data": data } }))
 }
 
 pub(crate) async fn start_review_core(

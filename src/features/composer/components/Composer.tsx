@@ -168,8 +168,6 @@ export const Composer = memo(function Composer({
   selectedEffort,
   onSelectEffort,
   reasoningSupported,
-  accessMode,
-  onSelectAccessMode,
   skills,
   apps,
   prompts,
@@ -828,8 +826,6 @@ export const Composer = memo(function Composer({
         selectedEffort={selectedEffort}
         onSelectEffort={onSelectEffort}
         reasoningSupported={reasoningSupported}
-        accessMode={accessMode}
-        onSelectAccessMode={onSelectAccessMode}
         contextUsage={contextUsage}
       />
     </footer>
