@@ -559,6 +559,7 @@ function MainApp() {
     handleApprovalDecision,
     handleApprovalRemember,
     handleUserInputSubmit,
+    handleUserInputDismiss,
     refreshAccountInfo,
     refreshAccountRateLimits,
   } = useThreads({
@@ -1751,6 +1752,7 @@ function MainApp() {
     handleApprovalDecision,
     handleApprovalRemember,
     handleUserInputSubmit,
+    handleUserInputDismiss,
     onPlanAccept: handlePlanAccept,
     onPlanSubmitChanges: handlePlanSubmitChanges,
     onOpenSettings: () => openSettings(),

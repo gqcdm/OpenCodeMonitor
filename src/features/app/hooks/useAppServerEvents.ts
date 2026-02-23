@@ -44,6 +44,7 @@ type AppServerEventHandlers = {
   ) => void;
   onApprovalRequest?: (request: ApprovalRequest) => void;
   onRequestUserInput?: (request: RequestUserInputRequest) => void;
+  onUserInputCompleted?: (requestId: string | number, workspaceId: string) => void;
   onAgentMessageDelta?: (event: AgentDelta) => void;
   onAgentMessageCompleted?: (event: AgentCompleted) => void;
   onAppServerEvent?: (event: AppServerEvent) => void;
@@ -112,6 +113,7 @@ export const METHODS_ROUTED_IN_USE_APP_SERVER_EVENTS = [
   "item/reasoning/textDelta",
   "item/started",
   "item/tool/requestUserInput",
+  "item/tool/userInputCompleted",
   "thread/name/updated",
   "thread/started",
   "thread/tokenUsage/updated",
@@ -210,6 +212,15 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
             questions,
           },
         });
+        return;
+      }
+
+      if (method === "item/tool/userInputCompleted") {
+        const requestId = params.requestId as string | number | undefined;
+        const workspaceId = String(params.workspaceId ?? workspace_id ?? "");
+        if (requestId !== undefined) {
+          currentHandlers.onUserInputCompleted?.(requestId, workspaceId);
+        }
         return;
       }
 

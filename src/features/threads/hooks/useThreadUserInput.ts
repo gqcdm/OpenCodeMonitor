@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { Dispatch } from "react";
 import type { RequestUserInputRequest, RequestUserInputResponse } from "@/types";
-import { respondToUserInputRequest } from "@services/tauri";
+import { respondToUserInputRequest, rejectUserInputRequest } from "@services/tauri";
 import type { ThreadAction } from "./useThreadsReducer";
 
 type UseThreadUserInputOptions = {
@@ -25,5 +25,17 @@ export function useThreadUserInput({ dispatch }: UseThreadUserInputOptions) {
     [dispatch],
   );
 
-  return { handleUserInputSubmit };
+  const handleUserInputDismiss = useCallback(
+    async (request: RequestUserInputRequest) => {
+      await rejectUserInputRequest(request.workspace_id, request.request_id);
+      dispatch({
+        type: "removeUserInputRequest",
+        requestId: request.request_id,
+        workspaceId: request.workspace_id,
+      });
+    },
+    [dispatch],
+  );
+
+  return { handleUserInputSubmit, handleUserInputDismiss };
 }

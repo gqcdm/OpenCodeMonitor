@@ -64,7 +64,7 @@ export function useThreadEventHandlers({
     dispatch,
     approvalAllowlistRef,
   });
-  const onRequestUserInput = useThreadUserInputEvents({ dispatch });
+  const { onRequestUserInput, onUserInputCompleted } = useThreadUserInputEvents({ dispatch });
 
   const {
     onAgentMessageDelta,
@@ -145,6 +145,7 @@ export function useThreadEventHandlers({
       onWorkspaceConnected,
       onApprovalRequest,
       onRequestUserInput,
+      onUserInputCompleted,
       onBackgroundThreadAction,
       onAppServerEvent,
       onAgentMessageDelta,
@@ -172,6 +173,7 @@ export function useThreadEventHandlers({
       onWorkspaceConnected,
       onApprovalRequest,
       onRequestUserInput,
+      onUserInputCompleted,
       onBackgroundThreadAction,
       onAppServerEvent,
       onAgentMessageDelta,

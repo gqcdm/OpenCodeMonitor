@@ -31,6 +31,15 @@ export function buildPrimaryNodes(options: LayoutNodesOptions): PrimaryLayoutNod
     ? options.threadStatusById[options.activeThreadId] ?? null
     : null;
 
+  const hasActiveUserInputRequest = Boolean(
+    options.activeThreadId &&
+      options.userInputRequests.some(
+        (req) =>
+          req.params.thread_id === options.activeThreadId &&
+          (!options.activeWorkspace?.id || req.workspace_id === options.activeWorkspace.id),
+      ),
+  );
+
   const sidebarNode = (
     <Sidebar
       workspaces={options.workspaces}
@@ -102,6 +111,7 @@ export function buildPrimaryNodes(options: LayoutNodesOptions): PrimaryLayoutNod
       showMessageFilePath={options.showMessageFilePath}
       userInputRequests={options.userInputRequests}
       onUserInputSubmit={options.handleUserInputSubmit}
+      onUserInputDismiss={options.handleUserInputDismiss}
       onPlanAccept={options.onPlanAccept}
       onPlanSubmitChanges={options.onPlanSubmitChanges}
       onOpenThreadLink={options.onOpenThreadLink}
@@ -122,7 +132,7 @@ export function buildPrimaryNodes(options: LayoutNodesOptions): PrimaryLayoutNod
       onQueue={options.onQueue}
       onStop={options.onStop}
       canStop={options.canStop}
-      disabled={options.isReviewing}
+      disabled={options.isReviewing || hasActiveUserInputRequest}
       isConnected={options.activeWorkspace?.connected ?? false}
       onFileAutocompleteActiveChange={options.onFileAutocompleteActiveChange}
       contextUsage={options.activeTokenUsage}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   RequestUserInputRequest,
   RequestUserInputResponse,
@@ -12,6 +12,7 @@ type RequestUserInputMessageProps = {
     request: RequestUserInputRequest,
     response: RequestUserInputResponse,
   ) => void;
+  onDismiss: (request: RequestUserInputRequest) => void;
 };
 
 type SelectionState = Record<string, number | null>;
@@ -22,6 +23,7 @@ export function RequestUserInputMessage({
   activeThreadId,
   activeWorkspaceId,
   onSubmit,
+  onDismiss,
 }: RequestUserInputMessageProps) {
   const activeRequests = useMemo(
     () =>
@@ -39,7 +41,10 @@ export function RequestUserInputMessage({
       }),
     [requests, activeThreadId, activeWorkspaceId],
   );
-  const activeRequest = activeRequests[0];
+  const activeRequest = activeRequests[0] ?? null;
+  const questions = activeRequest?.params.questions ?? [];
+  const totalRequests = activeRequests.length;
+
   const [selections, setSelections] = useState<SelectionState>({});
   const [notes, setNotes] = useState<NotesState>({});
 
@@ -60,14 +65,7 @@ export function RequestUserInputMessage({
     setNotes(nextNotes);
   }, [activeRequest]);
 
-  if (!activeRequest) {
-    return null;
-  }
-
-  const { questions } = activeRequest.params;
-  const totalRequests = activeRequests.length;
-
-  const buildAnswers = () => {
+  const buildAnswers = useCallback(() => {
     const answers: RequestUserInputResponse["answers"] = {};
     questions.forEach((question, index) => {
       if (!question.id) {
@@ -97,19 +95,53 @@ export function RequestUserInputMessage({
       answers[question.id] = { answers: answerList };
     });
     return answers;
-  };
+  }, [questions, selections, notes]);
 
-  const handleSelect = (questionId: string, optionIndex: number) => {
+  const handleSelect = useCallback((questionId: string, optionIndex: number) => {
     setSelections((current) => ({ ...current, [questionId]: optionIndex }));
-  };
+  }, []);
 
-  const handleNotesChange = (questionId: string, value: string) => {
+  const handleNotesChange = useCallback((questionId: string, value: string) => {
     setNotes((current) => ({ ...current, [questionId]: value }));
-  };
+  }, []);
 
-  const handleSubmit = () => {
+  const handleSubmit = useCallback(() => {
+    if (!activeRequest) return;
     onSubmit(activeRequest, { answers: buildAnswers() });
-  };
+  }, [activeRequest, onSubmit, buildAnswers]);
+
+  const handleDismiss = useCallback(() => {
+    if (!activeRequest) return;
+    onDismiss(activeRequest);
+  }, [activeRequest, onDismiss]);
+
+  useEffect(() => {
+    if (!activeRequest) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLTextAreaElement) {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          handleSubmit();
+        }
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        handleSubmit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        handleDismiss();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeRequest, handleSubmit, handleDismiss]);
+
+  if (!activeRequest) {
+    return null;
+  }
 
   return (
     <div className="message request-user-input-message">
@@ -192,6 +224,13 @@ export function RequestUserInputMessage({
           <button className="primary" onClick={handleSubmit}>
             Submit
           </button>
+          <button className="secondary" onClick={handleDismiss}>
+            Dismiss
+          </button>
+          <div className="request-user-input-shortcuts">
+            <span><kbd>Enter</kbd> Submit</span>
+            <span><kbd>Esc</kbd> Dismiss</span>
+          </div>
         </div>
       </div>
     </div>

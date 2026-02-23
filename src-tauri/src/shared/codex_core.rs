@@ -835,12 +835,12 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
     let parts = build_rest_prompt_parts(text, images, app_mentions).await?;
     let _prompt_guard = session.prompt_lock.lock().await;
 
-    // Synthesize turn ID and prepare translation state.
+    // Synthesize turn ID and prepare translation state for this session.
     let turn_n = TURN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let turn_id = format!("turn_{turn_n}");
     {
         let mut ts = session.translation_state.lock().await;
-        ts.start_turn(turn_id.clone());
+        ts.start_turn(thread_id.clone(), turn_id.clone());
     }
 
     // Emit synthetic turn/started.
@@ -1130,7 +1130,7 @@ pub(crate) async fn model_list_core(
 }
 
 // ---------------------------------------------------------------------------
-// Permission response (REST: POST /session/:sid/permissions/:pid)
+// Permission / Question response
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn respond_to_server_request_core(
@@ -1141,22 +1141,49 @@ pub(crate) async fn respond_to_server_request_core(
 ) -> Result<(), String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
 
-    // request_id is "sessionId:permissionId" composite string.
     let composite = request_id.as_str().unwrap_or_default();
-    let (_session_id, permission_id) = composite
-        .split_once(':')
-        .unwrap_or((composite, ""));
+    let (_session_id, resource_id) = composite.split_once(':').unwrap_or((composite, ""));
 
-    let accept = result
-        .get("decision")
-        .and_then(|v| v.as_str())
-        .map(|d| d == "accept")
-        .unwrap_or(true);
+    if let Some(answers) = result.get("answers") {
+        let answers_array = transform_question_answers(answers);
+        let body = json!({ "answers": answers_array });
+        let path = format!("/question/{resource_id}/reply");
+        session.rest_post_bool(&path, body).await?;
+    } else if result.get("reject").and_then(|v| v.as_bool()).unwrap_or(false) {
+        // Question rejection: POST /question/:id/reject
+        let path = format!("/question/{resource_id}/reject");
+        session.rest_post_bool(&path, json!({})).await?;
+    } else {
+        // Permission response: POST /permission/:id/reply
+        let accept = result
+            .get("decision")
+            .and_then(|v| v.as_str())
+            .map(|d| d == "accept")
+            .unwrap_or(true);
+        let body = event_translator::build_permission_response(accept);
+        let path = format!("/permission/{resource_id}/reply");
+        session.rest_post_bool(&path, body).await?;
+    }
 
-    let body = event_translator::build_permission_response(accept);
-    let path = format!("/permission/{permission_id}/reply");
-    session.rest_post_bool(&path, body).await?;
     Ok(())
+}
+
+fn transform_question_answers(answers: &Value) -> Value {
+    let Some(obj) = answers.as_object() else {
+        return Value::Array(vec![]);
+    };
+
+    let mut entries: Vec<(usize, Vec<Value>)> = obj
+        .iter()
+        .filter_map(|(key, val)| {
+            let idx = key.parse::<usize>().ok()?;
+            let inner = val.get("answers")?.as_array()?;
+            Some((idx, inner.clone()))
+        })
+        .collect();
+
+    entries.sort_by_key(|(idx, _)| *idx);
+    Value::Array(entries.into_iter().map(|(_, arr)| Value::Array(arr)).collect())
 }
 
 // ---------------------------------------------------------------------------

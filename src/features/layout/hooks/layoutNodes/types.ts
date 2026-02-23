@@ -141,6 +141,7 @@ export type LayoutNodesOptions = {
     request: RequestUserInputRequest,
     response: RequestUserInputResponse,
   ) => void;
+  handleUserInputDismiss: (request: RequestUserInputRequest) => void;
   onPlanAccept?: () => void;
   onPlanSubmitChanges?: (changes: string) => void;
   onOpenSettings: () => void;

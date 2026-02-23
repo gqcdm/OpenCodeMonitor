@@ -1089,6 +1089,7 @@ describe("Messages", () => {
           },
         ]}
         onUserInputSubmit={vi.fn()}
+        onUserInputDismiss={vi.fn()}
         onPlanAccept={onPlanAccept}
         onPlanSubmitChanges={onPlanSubmitChanges}
       />,

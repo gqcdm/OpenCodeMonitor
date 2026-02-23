@@ -8,10 +8,19 @@ type UseThreadUserInputEventsOptions = {
 };
 
 export function useThreadUserInputEvents({ dispatch }: UseThreadUserInputEventsOptions) {
-  return useCallback(
+  const onRequestUserInput = useCallback(
     (request: RequestUserInputRequest) => {
       dispatch({ type: "addUserInputRequest", request });
     },
     [dispatch],
   );
+
+  const onUserInputCompleted = useCallback(
+    (requestId: string | number, workspaceId: string) => {
+      dispatch({ type: "removeUserInputRequest", requestId, workspaceId });
+    },
+    [dispatch],
+  );
+
+  return { onRequestUserInput, onUserInputCompleted };
 }

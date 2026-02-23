@@ -369,6 +369,17 @@ export async function respondToUserInputRequest(
   });
 }
 
+export async function rejectUserInputRequest(
+  workspaceId: string,
+  requestId: number | string,
+) {
+  return invoke("respond_to_server_request", {
+    workspaceId,
+    requestId,
+    result: { reject: true },
+  });
+}
+
 export async function rememberApprovalRule(
   workspaceId: string,
   command: string[],

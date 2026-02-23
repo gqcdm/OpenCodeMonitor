@@ -55,6 +55,7 @@ type MessagesProps = {
     request: RequestUserInputRequest,
     response: RequestUserInputResponse,
   ) => void;
+  onUserInputDismiss?: (request: RequestUserInputRequest) => void;
   onPlanAccept?: () => void;
   onPlanSubmitChanges?: (changes: string) => void;
   onOpenThreadLink?: (threadId: string) => void;
@@ -75,6 +76,7 @@ export const Messages = memo(function Messages({
   showMessageFilePath = true,
   userInputRequests = [],
   onUserInputSubmit,
+  onUserInputDismiss,
   onPlanAccept,
   onPlanSubmitChanges,
   onOpenThreadLink,
@@ -273,14 +275,16 @@ export const Messages = memo(function Messages({
   const groupedItems = useMemo(() => buildToolGroups(visibleItems), [visibleItems]);
 
   const hasActiveUserInputRequest = activeUserInputRequestId !== null;
-  const hasVisibleUserInputRequest = hasActiveUserInputRequest && Boolean(onUserInputSubmit);
+  const hasVisibleUserInputRequest =
+    hasActiveUserInputRequest && Boolean(onUserInputSubmit) && Boolean(onUserInputDismiss);
   const userInputNode =
-    hasActiveUserInputRequest && onUserInputSubmit ? (
+    hasActiveUserInputRequest && onUserInputSubmit && onUserInputDismiss ? (
       <RequestUserInputMessage
         requests={userInputRequests}
         activeThreadId={threadId}
         activeWorkspaceId={workspaceId}
         onSubmit={onUserInputSubmit}
+        onDismiss={onUserInputDismiss}
       />
     ) : null;
 

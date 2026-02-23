@@ -75,7 +75,7 @@ export function useThreads({
   threadsByWorkspaceRef.current = state.threadsByWorkspace;
   const { approvalAllowlistRef, handleApprovalDecision, handleApprovalRemember } =
     useThreadApprovals({ dispatch, onDebug });
-  const { handleUserInputSubmit } = useThreadUserInput({ dispatch });
+  const { handleUserInputSubmit, handleUserInputDismiss } = useThreadUserInput({ dispatch });
   const {
     customNamesRef,
     threadActivityRef,
@@ -584,5 +584,6 @@ export function useThreads({
     handleApprovalDecision,
     handleApprovalRemember,
     handleUserInputSubmit,
+    handleUserInputDismiss,
   };
 }

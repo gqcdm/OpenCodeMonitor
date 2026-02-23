@@ -25,9 +25,29 @@ describe("useThreadUserInputEvents", () => {
     };
 
     act(() => {
-      result.current(request);
+      result.current.onRequestUserInput(request);
     });
 
     expect(dispatch).toHaveBeenCalledWith({ type: "addUserInputRequest", request });
+  });
+
+  it("removes user input request on completion", () => {
+    const dispatch = vi.fn();
+
+    const { result } = renderHook(() =>
+      useThreadUserInputEvents({
+        dispatch,
+      }),
+    );
+
+    act(() => {
+      result.current.onUserInputCompleted("req-1", "ws-1");
+    });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "removeUserInputRequest",
+      requestId: "req-1",
+      workspaceId: "ws-1",
+    });
   });
 });

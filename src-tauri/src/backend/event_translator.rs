@@ -10,16 +10,11 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Per-session state the translator needs to synthesize IDs the frontend
-/// expects but the REST SSE protocol does not provide (turn IDs, monotonic
-/// item IDs, etc.).
-pub(crate) struct SessionTranslationState {
-    /// The session ID (maps to CodexMonitor's "threadId").
-    pub(crate) session_id: String,
-    /// Synthesized turn ID.  Incremented each time a prompt is sent.
-    pub(crate) current_turn_id: String,
-    /// Counter for synthesizing unique item IDs.
-    item_counter: AtomicU64,
+/// Per-session turn state — tracks active turn and item IDs for a single session.
+#[derive(Default)]
+struct PerSessionTurnState {
+    /// Synthesized turn ID for this session.
+    turn_id: String,
     /// Map tool Part `id` → synthesized CodexMonitor `itemId`.
     tool_call_items: HashMap<String, String>,
     /// Stable item ID for the current agent-message stream.
@@ -28,6 +23,22 @@ pub(crate) struct SessionTranslationState {
     reasoning_item_id: Option<String>,
     /// OpenCode part ID for the current reasoning part (used to route `message.part.delta` events).
     reasoning_part_id: Option<String>,
+}
+
+/// Per-workspace state the translator needs to synthesize IDs the frontend
+/// expects but the REST SSE protocol does not provide (turn IDs, monotonic
+/// item IDs, etc.).
+///
+/// Multiple sessions can be active in a single workspace (e.g., main session +
+/// subagent sessions), so turn state is tracked per session_id.
+pub(crate) struct SessionTranslationState {
+    /// The most recently active session ID (maps to CodexMonitor's "threadId").
+    /// Used as a fallback when events don't specify sessionID.
+    pub(crate) session_id: String,
+    /// Per-session turn state — allows concurrent sessions to track their own turns.
+    session_turns: HashMap<String, PerSessionTurnState>,
+    /// Counter for synthesizing unique item IDs (shared across all sessions).
+    item_counter: AtomicU64,
     /// Stable item ID for contiguous user-message chunk streams.
     pub(crate) user_message_item_id: Option<String>,
     /// Buffered text for contiguous user-message chunk streams.
@@ -38,12 +49,8 @@ impl SessionTranslationState {
     pub(crate) fn new(session_id: String) -> Self {
         Self {
             session_id,
-            current_turn_id: String::new(),
+            session_turns: HashMap::new(),
             item_counter: AtomicU64::new(1),
-            tool_call_items: HashMap::new(),
-            agent_message_item_id: None,
-            reasoning_item_id: None,
-            reasoning_part_id: None,
             user_message_item_id: None,
             user_message_text: String::new(),
         }
@@ -54,46 +61,63 @@ impl SessionTranslationState {
         format!("item_{n}")
     }
 
-    /// Start a new turn (called before sending a prompt). Resets per-turn
-    /// ephemeral state so the next batch of events gets fresh item IDs.
-    pub(crate) fn start_turn(&mut self, turn_id: String) {
-        self.current_turn_id = turn_id;
-        self.tool_call_items.clear();
-        self.agent_message_item_id = None;
-        self.reasoning_item_id = None;
-        self.reasoning_part_id = None;
+    /// Start a new turn for a specific session.
+    pub(crate) fn start_turn(&mut self, session_id: String, turn_id: String) {
+        self.session_id = session_id.clone();
+        let turn_state = self.session_turns.entry(session_id).or_default();
+        turn_state.turn_id = turn_id;
+        turn_state.tool_call_items.clear();
+        turn_state.agent_message_item_id = None;
+        turn_state.reasoning_item_id = None;
+        turn_state.reasoning_part_id = None;
         self.user_message_item_id = None;
         self.user_message_text.clear();
     }
 
     /// Prepare translation state for replaying historical messages.
     pub(crate) fn prepare_replay(&mut self, session_id: String) {
-        self.session_id = session_id;
-        self.current_turn_id.clear();
-        self.tool_call_items.clear();
-        self.agent_message_item_id = None;
-        self.reasoning_item_id = None;
-        self.reasoning_part_id = None;
+        self.session_id = session_id.clone();
+        if let Some(turn_state) = self.session_turns.get_mut(&session_id) {
+            turn_state.turn_id.clear();
+            turn_state.tool_call_items.clear();
+            turn_state.agent_message_item_id = None;
+            turn_state.reasoning_item_id = None;
+            turn_state.reasoning_part_id = None;
+        }
         self.user_message_item_id = None;
         self.user_message_text.clear();
     }
 
-    fn agent_message_item(&mut self) -> String {
-        if let Some(ref id) = self.agent_message_item_id {
+    fn get_turn_state(&self, session_id: &str) -> Option<&PerSessionTurnState> {
+        self.session_turns.get(session_id)
+    }
+
+    fn get_turn_state_mut(&mut self, session_id: &str) -> &mut PerSessionTurnState {
+        self.session_turns
+            .entry(session_id.to_string())
+            .or_default()
+    }
+
+    fn agent_message_item(&mut self, session_id: &str) -> String {
+        let turn_state = self.get_turn_state_mut(session_id);
+        if let Some(ref id) = turn_state.agent_message_item_id {
             id.clone()
         } else {
             let id = self.next_item_id();
-            self.agent_message_item_id = Some(id.clone());
+            let turn_state = self.get_turn_state_mut(session_id);
+            turn_state.agent_message_item_id = Some(id.clone());
             id
         }
     }
 
-    fn reasoning_item(&mut self) -> String {
-        if let Some(ref id) = self.reasoning_item_id {
+    fn reasoning_item(&mut self, session_id: &str) -> String {
+        let turn_state = self.get_turn_state_mut(session_id);
+        if let Some(ref id) = turn_state.reasoning_item_id {
             id.clone()
         } else {
             let id = self.next_item_id();
-            self.reasoning_item_id = Some(id.clone());
+            let turn_state = self.get_turn_state_mut(session_id);
+            turn_state.reasoning_item_id = Some(id.clone());
             id
         }
     }
@@ -109,10 +133,12 @@ impl SessionTranslationState {
     }
 
     pub(crate) fn mark_new_replayed_user_message_boundary(&mut self) {
-        self.tool_call_items.clear();
-        self.agent_message_item_id = None;
-        self.reasoning_item_id = None;
-        self.reasoning_part_id = None;
+        if let Some(turn_state) = self.session_turns.get_mut(&self.session_id) {
+            turn_state.tool_call_items.clear();
+            turn_state.agent_message_item_id = None;
+            turn_state.reasoning_item_id = None;
+            turn_state.reasoning_part_id = None;
+        }
     }
 }
 
@@ -142,6 +168,9 @@ pub(crate) fn translate_sse_event(
         "message.updated" => translate_message_updated(properties, state),
         "session.status" => translate_session_status(properties, state),
         "permission.updated" => translate_sse_permission(properties, state),
+        "question.asked" => translate_question_asked(properties, state),
+        "question.replied" => translate_question_completed(properties),
+        "question.rejected" => translate_question_completed(properties),
         "server.heartbeat"
         | "file.watcher.updated"
         | "session.updated"
@@ -171,14 +200,16 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
 
     let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-    // Extract session ID from the part if available.
     if let Some(sid) = part.get("sessionID").and_then(|v| v.as_str()) {
         if !sid.is_empty() {
             state.session_id = sid.to_string();
         }
     }
     let thread_id = state.session_id.clone();
-    let turn_id = state.current_turn_id.clone();
+    let turn_id = state
+        .get_turn_state(&thread_id)
+        .map(|ts| ts.turn_id.clone())
+        .unwrap_or_default();
 
     match part_type {
         "text" => {
@@ -186,21 +217,7 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
                 return vec![];
             }
 
-            // Check message role to distinguish user vs assistant text.
-            let message_role = part
-                .get("messageID")
-                .and_then(|_| properties.get("part"))
-                .and_then(|_| {
-                    // If we're in replay mode (no turn ID), text parts from
-                    // user messages should be emitted as userMessage items.
-                    // The REST API doesn't give us explicit role on the Part,
-                    // but during replay we infer from turn state.
-                    None::<&str>
-                });
-            let _ = message_role; // Unused for now; user messages handled separately.
-
-            // In active turn mode, text deltas are agent message chunks.
-            let item_id = state.agent_message_item();
+            let item_id = state.agent_message_item(&thread_id);
             vec![json!({
                 "method": "item/agentMessage/delta",
                 "params": {
@@ -213,15 +230,14 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
         }
 
         "reasoning" => {
-            // Track the OpenCode part ID so `message.part.delta` events can be
-            // routed to reasoning vs text.
             if let Some(pid) = part.get("id").and_then(|v| v.as_str()) {
-                state.reasoning_part_id = Some(pid.to_string());
+                let turn_state = state.get_turn_state_mut(&thread_id);
+                turn_state.reasoning_part_id = Some(pid.to_string());
             }
             if delta.is_empty() {
                 return vec![];
             }
-            let item_id = state.reasoning_item();
+            let item_id = state.reasoning_item(&thread_id);
             vec![json!({
                 "method": "item/reasoning/textDelta",
                 "params": {
@@ -260,7 +276,10 @@ fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState)
         .and_then(|v| v.as_str())
         .unwrap_or("text");
     let thread_id = state.session_id.clone();
-    let turn_id = state.current_turn_id.clone();
+    let turn_id = state
+        .get_turn_state(&thread_id)
+        .map(|ts| ts.turn_id.clone())
+        .unwrap_or_default();
 
     match field {
         "text" => {
@@ -269,22 +288,26 @@ fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState)
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
 
-            if let Some(ref reasoning_part_id) = state.reasoning_part_id {
-                if part_id == reasoning_part_id {
-                    let item_id = state.reasoning_item();
-                    return vec![json!({
-                        "method": "item/reasoning/textDelta",
-                        "params": {
-                            "threadId": thread_id,
-                            "turnId": turn_id,
-                            "itemId": item_id,
-                            "delta": delta
-                        }
-                    })];
-                }
+            let is_reasoning = state
+                .get_turn_state(&thread_id)
+                .and_then(|ts| ts.reasoning_part_id.as_ref())
+                .map(|rpid| part_id == rpid)
+                .unwrap_or(false);
+
+            if is_reasoning {
+                let item_id = state.reasoning_item(&thread_id);
+                return vec![json!({
+                    "method": "item/reasoning/textDelta",
+                    "params": {
+                        "threadId": thread_id,
+                        "turnId": turn_id,
+                        "itemId": item_id,
+                        "delta": delta
+                    }
+                })];
             }
 
-            let item_id = state.agent_message_item();
+            let item_id = state.agent_message_item(&thread_id);
             vec![json!({
                 "method": "item/agentMessage/delta",
                 "params": {
@@ -322,12 +345,14 @@ fn translate_tool_part(
         .unwrap_or("unknown");
     let part_id = part.get("id").and_then(|v| v.as_str()).unwrap_or_default();
 
-    let item_id = if let Some(existing) = state.tool_call_items.get(part_id) {
+    let turn_state = state.get_turn_state_mut(thread_id);
+    let item_id = if let Some(existing) = turn_state.tool_call_items.get(part_id) {
         existing.clone()
     } else {
         let id = state.next_item_id();
         if !part_id.is_empty() {
-            state
+            let turn_state = state.get_turn_state_mut(thread_id);
+            turn_state
                 .tool_call_items
                 .insert(part_id.to_string(), id.clone());
         }
@@ -523,14 +548,16 @@ fn translate_session_status(properties: &Value, state: &mut SessionTranslationSt
         .unwrap_or("");
 
     let thread_id = state.session_id.clone();
-    let turn_id = state.current_turn_id.clone();
+    let turn_id = state
+        .get_turn_state(&thread_id)
+        .map(|ts| ts.turn_id.clone())
+        .unwrap_or_default();
 
     match status {
         "idle" => {
-            // Idle after active means the turn is done.
             if !turn_id.is_empty() {
                 let mut events = Vec::new();
-                if let Some(msg_completed) = build_agent_message_completed(state) {
+                if let Some(msg_completed) = build_agent_message_completed(state, &thread_id) {
                     events.push(msg_completed);
                 }
                 events.push(build_turn_completed(&thread_id, &turn_id));
@@ -619,6 +646,123 @@ pub(crate) fn build_permission_response(accept: bool) -> Value {
 }
 
 // ---------------------------------------------------------------------------
+// question.asked — user input request from Claude (mcp_question tool)
+// ---------------------------------------------------------------------------
+
+fn translate_question_asked(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+    let question_id = properties
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let session_id = properties
+        .get("sessionID")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| state.session_id.clone());
+
+    if question_id.is_empty() {
+        return vec![];
+    }
+
+    if !session_id.is_empty() {
+        state.session_id = session_id.clone();
+    }
+
+    let thread_id = state.session_id.clone();
+    let turn_id = state
+        .get_turn_state(&thread_id)
+        .map(|ts| ts.turn_id.clone())
+        .unwrap_or_default();
+    let item_id = state.next_item_id();
+
+    // Composite ID for response routing: "sessionId:questionId"
+    let composite_id = format!("{session_id}:{question_id}");
+
+    // Transform questions array to frontend-expected shape
+    let questions: Vec<Value> = properties
+        .get("questions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .enumerate()
+                .map(|(idx, q)| {
+                    let header = q.get("header").and_then(|v| v.as_str()).unwrap_or_default();
+                    let question_text = q
+                        .get("question")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    // OpenCode uses "custom" field to indicate if custom input is allowed
+                    let is_other = q.get("custom").and_then(|v| v.as_bool()).unwrap_or(true);
+
+                    let options: Vec<Value> = q
+                        .get("options")
+                        .and_then(|v| v.as_array())
+                        .map(|opts| {
+                            opts.iter()
+                                .map(|opt| {
+                                    json!({
+                                        "label": opt.get("label").and_then(|v| v.as_str()).unwrap_or_default(),
+                                        "description": opt.get("description").and_then(|v| v.as_str()).unwrap_or_default()
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    json!({
+                        "id": idx.to_string(),
+                        "header": header,
+                        "question": question_text,
+                        "isOther": is_other,
+                        "options": options
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    vec![json!({
+        "id": composite_id,
+        "method": "item/tool/requestUserInput",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "itemId": item_id,
+            "questions": questions
+        }
+    })]
+}
+
+// ---------------------------------------------------------------------------
+// question.replied / question.rejected — cleanup after user responds/dismisses
+// ---------------------------------------------------------------------------
+
+fn translate_question_completed(properties: &Value) -> Vec<Value> {
+    let session_id = properties
+        .get("sessionID")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let request_id = properties
+        .get("requestID")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if request_id.is_empty() {
+        return vec![];
+    }
+
+    let composite_id = format!("{session_id}:{request_id}");
+
+    vec![json!({
+        "method": "item/tool/userInputCompleted",
+        "params": {
+            "requestId": composite_id,
+            "workspaceId": session_id
+        }
+    })]
+}
+
+// ---------------------------------------------------------------------------
 // Synthetic turn events
 // ---------------------------------------------------------------------------
 
@@ -648,12 +792,16 @@ pub(crate) fn build_turn_completed(session_id: &str, turn_id: &str) -> Value {
     })
 }
 
-pub(crate) fn build_agent_message_completed(state: &SessionTranslationState) -> Option<Value> {
-    let item_id = state.agent_message_item_id.as_ref()?;
+pub(crate) fn build_agent_message_completed(
+    state: &SessionTranslationState,
+    session_id: &str,
+) -> Option<Value> {
+    let turn_state = state.get_turn_state(session_id)?;
+    let item_id = turn_state.agent_message_item_id.as_ref()?;
     Some(json!({
         "method": "item/completed",
         "params": {
-            "threadId": state.session_id,
+            "threadId": session_id,
             "item": {
                 "id": item_id,
                 "type": "agentMessage",
@@ -800,7 +948,7 @@ mod tests {
 
     fn make_state() -> SessionTranslationState {
         let mut s = SessionTranslationState::new("ses_test123".into());
-        s.start_turn("turn_1".into());
+        s.start_turn("ses_test123".into(), "turn_1".into());
         s
     }
 
@@ -956,6 +1104,42 @@ mod tests {
         });
         let events = translate_sse_event(&event, &mut state);
         assert!(events.iter().any(|e| e["method"] == "turn/completed"));
+    }
+
+    #[test]
+    fn concurrent_sessions_get_correct_turn_ids() {
+        let mut state = SessionTranslationState::new(String::new());
+
+        // Session A starts a turn
+        state.start_turn("ses_A".into(), "turn_A1".into());
+        // Session B starts a turn (should NOT clobber A's turn)
+        state.start_turn("ses_B".into(), "turn_B1".into());
+
+        // Idle event for session A should use turn_A1, not turn_B1
+        let event_a = json!({
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses_A",
+                "status": { "type": "idle" }
+            }
+        });
+        let events = translate_sse_event(&event_a, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "turn/completed");
+        assert_eq!(events[0]["params"]["threadId"], "ses_A");
+        assert_eq!(events[0]["params"]["turn"]["id"], "turn_A1");
+
+        // Idle event for session B should use turn_B1
+        let event_b = json!({
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses_B",
+                "status": { "type": "idle" }
+            }
+        });
+        let events = translate_sse_event(&event_b, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["params"]["turn"]["id"], "turn_B1");
     }
 
     #[test]
