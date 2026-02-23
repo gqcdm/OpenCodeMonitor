@@ -23,7 +23,6 @@ pub(crate) async fn spawn_workspace_session(
     codex_args: Option<String>,
     app_handle: AppHandle,
     codex_home: Option<PathBuf>,
-    acp_port: u16,
 ) -> Result<Arc<WorkspaceSession>, String> {
     let client_version = app_handle.package_info().version.to_string();
     let event_sink = TauriEventSink::new(app_handle);
@@ -34,7 +33,6 @@ pub(crate) async fn spawn_workspace_session(
         codex_home,
         client_version,
         event_sink,
-        acp_port,
     )
     .await
 }
@@ -88,14 +86,15 @@ pub(crate) async fn resume_thread(
     if remote_backend::is_remote_mode(&*state).await {
         return remote_backend::call_remote(
             &*state,
-            app,
+            app.clone(),
             "resume_thread",
             json!({ "workspaceId": workspace_id, "threadId": thread_id }),
         )
         .await;
     }
 
-    codex_core::resume_thread_core(&state.sessions, workspace_id, thread_id).await
+    let event_sink = crate::event_sink::TauriEventSink::new(app.clone());
+    codex_core::resume_thread_core(&state.sessions, workspace_id, thread_id, &event_sink).await
 }
 
 #[tauri::command]

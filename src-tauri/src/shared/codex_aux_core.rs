@@ -278,31 +278,15 @@ where
             .clone()
     };
 
-    let thread_params = json!({
-        "cwd": session.entry.path,
-        "approvalPolicy": "never",
-        "mcpServers": []
-    });
-    let thread_result = session.send_request("session/new", thread_params).await?;
-
-    if let Some(error) = thread_result.get("error") {
-        let error_msg = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("Unknown error starting session");
-        return Err(error_msg.to_string());
-    }
+    // POST /session → { id, projectID, directory }
+    let thread_result = session.rest_post("/session", json!({})).await?;
 
     let thread_id = thread_result
-        .get("result")
-        .and_then(|r| r.get("sessionId"))
-        .or_else(|| thread_result.get("result").and_then(|r| r.get("threadId")))
-        .or_else(|| thread_result.get("sessionId"))
-        .or_else(|| thread_result.get("threadId"))
+        .get("id")
         .and_then(|t| t.as_str())
         .ok_or_else(|| {
             format!(
-                "Failed to get sessionId from session/new response: {:?}",
+                "Failed to get session id from POST /session response: {:?}",
                 thread_result
             )
         })?
@@ -324,39 +308,20 @@ where
         callbacks.insert(thread_id.clone(), tx.clone());
     }
 
-    let turn_params = json!({
-        "sessionId": thread_id.clone(),
-        "prompt": [{ "type": "text", "text": prompt }],
+    // prompt_async is fire-and-forget (returns 204).  Turn completion
+    // arrives via SSE → background_thread_callbacks channel.
+    let prompt_path = format!("/session/{}/prompt_async", &thread_id);
+    let prompt_body = json!({
+        "parts": [{ "type": "text", "text": prompt }],
     });
     let _prompt_guard = session.prompt_lock.lock().await;
-    let turn_result = session.send_request("session/prompt", turn_params).await;
-    let turn_result = match turn_result {
-        Ok(result) => result,
-        Err(error) => {
-            {
-                let mut callbacks = session.background_thread_callbacks.lock().await;
-                callbacks.remove(&thread_id);
-            }
-            return Err(error);
-        }
-    };
-
-    if let Some(error) = turn_result.get("error") {
-        let error_msg = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or(turn_error_fallback);
+    if let Err(error) = session.rest_post(&prompt_path, prompt_body).await {
         {
             let mut callbacks = session.background_thread_callbacks.lock().await;
             callbacks.remove(&thread_id);
         }
-        return Err(error_msg.to_string());
+        return Err(error);
     }
-
-    let _ = tx.send(json!({
-        "method": "turn/completed",
-        "params": { "threadId": thread_id.clone() }
-    }));
 
     let mut response_text = String::new();
     let collect_result = timeout(Duration::from_secs(60), async {

@@ -17,8 +17,6 @@ use super::worktree::{
     sanitize_worktree_name, unique_worktree_path, unique_worktree_path_for_rename,
 };
 
-use std::sync::atomic::Ordering;
-
 use crate::backend::app_server::WorkspaceSession;
 use crate::codex::spawn_workspace_session;
 use crate::git_utils::resolve_git_root;
@@ -29,20 +27,18 @@ use crate::types::{WorkspaceEntry, WorkspaceInfo, WorkspaceSettings, WorktreeSet
 
 fn spawn_with_app(
     app: &AppHandle,
-    state: &AppState,
+    _state: &AppState,
     entry: WorkspaceEntry,
     default_bin: Option<String>,
     codex_args: Option<String>,
     codex_home: Option<PathBuf>,
 ) -> impl std::future::Future<Output = Result<Arc<WorkspaceSession>, String>> {
-    let port = state.next_acp_port.fetch_add(1, Ordering::SeqCst);
     spawn_workspace_session(
         entry,
         default_bin,
         codex_args,
         app.clone(),
         codex_home,
-        port,
     )
 }
 

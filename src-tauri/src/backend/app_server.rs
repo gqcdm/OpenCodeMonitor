@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio::time::timeout;
+use futures_util::StreamExt;
+use reqwest_eventsource::{Event, EventSource};
+use tokio::process::{Child, Command};
+use tokio::sync::{mpsc, watch, Mutex, OnceCell};
+use tokio::time::{sleep, timeout};
 
 use crate::backend::event_translator::{self, SessionTranslationState};
 use crate::backend::events::{AppServerEvent, EventSink};
@@ -40,51 +40,136 @@ fn extract_thread_id(value: &Value) -> Option<String> {
         })
 }
 
-fn build_initialize_params(_client_version: &str) -> Value {
-    // ACP v1 protocol: only protocolVersion is required.
-    // No clientInfo/capabilities/initialized notification needed.
-    json!({
-        "protocolVersion": 1
-    })
+// ---------------------------------------------------------------------------
+// OpenCode REST server process (singleton)
+// ---------------------------------------------------------------------------
+
+/// The single `opencode serve` process shared by all workspaces.
+static SERVER_PROCESS: OnceCell<Mutex<ServerProcess>> = OnceCell::const_new();
+
+/// Default port for `opencode serve`.
+const REST_PORT: u16 = 14096;
+
+struct ServerProcess {
+    child: Child,
+    base_url: String,
 }
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+async fn ensure_server_running(
+    codex_bin: Option<String>,
+    codex_args: Option<&str>,
+) -> Result<String, String> {
+    let base_url = format!("http://127.0.0.1:{REST_PORT}");
+
+    // Fast path: if already initialized, just return the URL.
+    if SERVER_PROCESS.get().is_some() {
+        return Ok(base_url);
+    }
+
+    // If a server is already listening (e.g. user started one externally), use it.
+    if health_check(&base_url).await.is_ok() {
+        return Ok(base_url);
+    }
+
+    let init_result = SERVER_PROCESS
+        .get_or_try_init(|| async {
+            let mut command = build_codex_command_with_bin(
+                codex_bin,
+                codex_args,
+                vec![
+                    "serve".to_string(),
+                    "--port".to_string(),
+                    REST_PORT.to_string(),
+                ],
+            )?;
+            command.stdin(std::process::Stdio::null());
+            command.stdout(std::process::Stdio::null());
+            command.stderr(std::process::Stdio::null());
+
+            let child = command.spawn().map_err(|e| {
+                if e.kind() == ErrorKind::NotFound {
+                    "OpenCode CLI not found. Install OpenCode and ensure `opencode` is on your PATH."
+                        .to_string()
+                } else {
+                    e.to_string()
+                }
+            })?;
+
+            // Poll health endpoint until ready.
+            let start = std::time::Instant::now();
+            let health_timeout = Duration::from_secs(30);
+            loop {
+                if start.elapsed() > health_timeout {
+                    return Err(
+                        "OpenCode server did not become healthy within 30 seconds.".to_string()
+                    );
+                }
+                if health_check(&base_url).await.is_ok() {
+                    break;
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+
+            Ok(Mutex::new(ServerProcess {
+                child,
+                base_url: base_url.clone(),
+            }))
+        })
+        .await;
+
+    match init_result {
+        Ok(_) => Ok(base_url),
+        Err(e) => Err(e),
+    }
+}
+
+async fn health_check(base_url: &str) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("{base_url}/global/health"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("health check returned {}", resp.status()));
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// WorkspaceSession (REST-based)
+// ---------------------------------------------------------------------------
 
 pub(crate) struct WorkspaceSession {
     pub(crate) entry: WorkspaceEntry,
-    pub(crate) child: Mutex<Child>,
-    pub(crate) stdin: Mutex<ChildStdin>,
-    pub(crate) pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
-    pub(crate) next_id: AtomicU64,
-    /// Callbacks for background threads - events for these threadIds are sent through the channel
+    /// HTTP client for REST calls to the OpenCode server.
+    pub(crate) http_client: reqwest::Client,
+    /// Base URL of the OpenCode server (e.g. "http://127.0.0.1:14096").
+    pub(crate) base_url: String,
+    /// Callbacks for background threads — events for these threadIds are sent
+    /// through the channel instead of the main event sink.
     pub(crate) background_thread_callbacks: Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>,
-    /// ACP → CodexMonitor event translation state (turn IDs, item IDs, tool-call mapping).
+    /// SSE → CodexMonitor event translation state (turn IDs, item IDs, tool-call mapping).
     pub(crate) translation_state: Mutex<SessionTranslationState>,
-    /// Cached ACP model payload from `session/new`/`session/load`.
+    /// Cached model/provider data from `GET /config/providers`.
     pub(crate) models_cache: Mutex<Option<Value>>,
-    /// Pre-warmed ACP session ID created eagerly on workspace connect.
-    /// Consumed by the first `start_thread` call to avoid a duplicate `session/new`.
+    /// Pre-warmed OpenCode session ID created eagerly on workspace connect.
+    /// Consumed by the first `start_thread` call to avoid a duplicate `POST /session`.
     pub(crate) prewarmed_session_id: Mutex<Option<String>>,
-    /// One in-flight `session/prompt` at a time per workspace session.
+    /// One in-flight prompt at a time per workspace session.
     pub(crate) prompt_lock: Mutex<()>,
-    /// Capability state for best-effort model switching.
-    pub(crate) model_set_capability: Mutex<ModelSetCapability>,
-    /// Emit model-set warning only once per workspace session.
-    pub(crate) model_set_warning_emitted: Mutex<bool>,
+    /// Sender to signal SSE reader shutdown when workspace disconnects.
+    shutdown_tx: watch::Sender<bool>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ModelSetMethod {
-    UnstableSetSessionModelId,
-    UnstableSetSessionModel,
-    SessionSetModelId,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ModelSetCapability {
-    Unknown,
-    Supported(ModelSetMethod),
-    Unsupported,
+impl WorkspaceSession {
+    /// Signal the SSE reader task to shut down.
+    pub(crate) fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
+    }
 }
 
 async fn route_translated_event_to_background_callback(
@@ -103,58 +188,116 @@ async fn route_translated_event_to_background_callback(
 }
 
 impl WorkspaceSession {
-    async fn write_message(&self, value: Value) -> Result<(), String> {
-        let mut stdin = self.stdin.lock().await;
-        let mut line = serde_json::to_string(&value).map_err(|e| e.to_string())?;
-        line.push('\n');
-        stdin
-            .write_all(line.as_bytes())
+    /// Send a GET request to the OpenCode REST API, scoped to this workspace.
+    pub(crate) async fn rest_get(&self, path: &str) -> Result<Value, String> {
+        let separator = if path.contains('?') { "&" } else { "?" };
+        let url = format!(
+            "{}{path}{separator}directory={}",
+            self.base_url,
+            urlencoding::encode(&self.entry.path)
+        );
+        let resp = self
+            .http_client
+            .get(&url)
+            .send()
             .await
-            .map_err(|e| e.to_string())
-    }
-
-    pub(crate) async fn send_request(&self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
-        if let Err(error) = self
-            .write_message(json!({ "id": id, "method": method, "params": params }))
-            .await
-        {
-            self.pending.lock().await.remove(&id);
-            return Err(error);
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("REST GET {path} failed ({status}): {body}"));
         }
-        match timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(_)) => Err("request canceled".to_string()),
-            Err(_) => {
-                self.pending.lock().await.remove(&id);
-                Err(format!(
-                    "request timed out after {} seconds",
-                    REQUEST_TIMEOUT.as_secs()
-                ))
-            }
-        }
+        resp.json::<Value>().await.map_err(|e| e.to_string())
     }
 
-    pub(crate) async fn send_notification(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<(), String> {
-        let value = if let Some(params) = params {
-            json!({ "method": method, "params": params })
-        } else {
-            json!({ "method": method })
-        };
-        self.write_message(value).await
-    }
-
-    pub(crate) async fn send_response(&self, id: Value, result: Value) -> Result<(), String> {
-        self.write_message(json!({ "id": id, "result": result }))
+    /// Send a POST request to the OpenCode REST API, scoped to this workspace.
+    pub(crate) async fn rest_post(&self, path: &str, body: Value) -> Result<Value, String> {
+        let separator = if path.contains('?') { "&" } else { "?" };
+        let url = format!(
+            "{}{path}{separator}directory={}",
+            self.base_url,
+            urlencoding::encode(&self.entry.path)
+        );
+        let resp = self
+            .http_client
+            .post(&url)
+            .json(&body)
+            .send()
             .await
+            .map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NO_CONTENT {
+            return Ok(Value::Null);
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("REST POST {path} failed ({status}): {body}"));
+        }
+        // Some endpoints return empty body on success.
+        let text = resp.text().await.map_err(|e| e.to_string())?;
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text)
+            .map_err(|e| format!("Failed to parse response from {path}: {e}"))
+    }
+
+    /// Send a POST request that returns a boolean (e.g. abort, permissions).
+    pub(crate) async fn rest_post_bool(&self, path: &str, body: Value) -> Result<bool, String> {
+        let separator = if path.contains('?') { "&" } else { "?" };
+        let url = format!(
+            "{}{path}{separator}directory={}",
+            self.base_url,
+            urlencoding::encode(&self.entry.path)
+        );
+        let resp = self
+            .http_client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("REST POST {path} failed ({status}): {body}"));
+        }
+        let text = resp.text().await.map_err(|e| e.to_string())?;
+        // Parse as bool; fall back to true on success status.
+        Ok(text.trim().parse::<bool>().unwrap_or(true))
     }
 }
+
+// ---------------------------------------------------------------------------
+// URL encoding helper (inline, no extra dep)
+// ---------------------------------------------------------------------------
+
+mod urlencoding {
+    use std::fmt::Write;
+
+    pub(crate) fn encode(input: &str) -> String {
+        let mut out = String::with_capacity(input.len() * 3);
+        for byte in input.bytes() {
+            match byte {
+                b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'-'
+                | b'_'
+                | b'.'
+                | b'~' => out.push(byte as char),
+                _ => {
+                    let _ = write!(out, "%{byte:02X}");
+                }
+            }
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PATH env and command building (unchanged from ACP)
+// ---------------------------------------------------------------------------
 
 pub(crate) fn build_codex_path_env(codex_bin: Option<&str>) -> Option<String> {
     let mut paths: Vec<PathBuf> = env::var_os("PATH")
@@ -343,14 +486,127 @@ pub(crate) async fn check_codex_installation(
     })
 }
 
+// ---------------------------------------------------------------------------
+// SSE reader task
+// ---------------------------------------------------------------------------
+
+fn spawn_sse_reader<E: EventSink>(
+    session: Arc<WorkspaceSession>,
+    workspace_id: String,
+    mut shutdown_rx: watch::Receiver<bool>,
+    event_sink: E,
+) {
+    let workspace_path = session.entry.path.clone();
+
+    tokio::spawn(async move {
+        let url = format!("{}/global/event", session.base_url);
+
+        let mut reconnect_delay = Duration::from_millis(500);
+        let max_reconnect_delay = Duration::from_secs(10);
+
+        'outer: loop {
+            if *shutdown_rx.borrow() {
+                break;
+            }
+
+            let mut es = EventSource::get(&url);
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.changed() => {
+                        es.close();
+                        break 'outer;
+                    }
+                    event_opt = es.next() => {
+                        let Some(event_result) = event_opt else {
+                            break;
+                        };
+
+                        reconnect_delay = Duration::from_millis(500);
+
+                        match event_result {
+                            Ok(Event::Open) => {}
+                            Ok(Event::Message(msg)) => {
+                                let value: Value = match serde_json::from_str(&msg.data) {
+                                    Ok(v) => v,
+                                    Err(err) => {
+                                        let payload = AppServerEvent {
+                                            workspace_id: workspace_id.clone(),
+                                            message: json!({
+                                                "method": "codex/parseError",
+                                                "params": { "error": err.to_string(), "raw": msg.data },
+                                            }),
+                                        };
+                                        event_sink.emit_app_server_event(payload);
+                                        continue;
+                                    }
+                                };
+
+                                // Filter events by directory — only process events for this workspace.
+                                let event_dir = value
+                                    .get("properties")
+                                    .and_then(|p| p.get("directory"))
+                                    .and_then(|d| d.as_str())
+                                    .unwrap_or("");
+                                if !event_dir.is_empty() && event_dir != workspace_path {
+                                    continue;
+                                }
+
+                                let translated = {
+                                    let mut ts = session.translation_state.lock().await;
+                                    event_translator::translate_sse_event(&value, &mut ts)
+                                };
+
+                                for translated_msg in translated {
+                                    let sent_to_background =
+                                        route_translated_event_to_background_callback(
+                                            &session.background_thread_callbacks,
+                                            &translated_msg,
+                                        )
+                                        .await;
+                                    if !sent_to_background {
+                                        let payload = AppServerEvent {
+                                            workspace_id: workspace_id.clone(),
+                                            message: translated_msg,
+                                        };
+                                        event_sink.emit_app_server_event(payload);
+                                    }
+                                }
+                            }
+                            Err(reqwest_eventsource::Error::StreamEnded) => {
+                                break;
+                            }
+                            Err(_err) => {
+                                #[cfg(debug_assertions)]
+                                eprintln!("[sse_reader] SSE error for {workspace_id}: {_err}");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if *shutdown_rx.borrow() {
+                break;
+            }
+
+            sleep(reconnect_delay).await;
+            reconnect_delay = (reconnect_delay * 2).min(max_reconnect_delay);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Workspace session lifecycle
+// ---------------------------------------------------------------------------
+
 pub(crate) async fn spawn_workspace_session<E: EventSink>(
     entry: WorkspaceEntry,
     default_codex_bin: Option<String>,
     codex_args: Option<String>,
     _codex_home: Option<PathBuf>,
-    client_version: String,
+    _client_version: String,
     event_sink: E,
-    acp_port: u16,
 ) -> Result<Arc<WorkspaceSession>, String> {
     let codex_bin = entry
         .codex_bin
@@ -359,206 +615,36 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         .or(default_codex_bin);
     let _ = check_codex_installation(codex_bin.clone()).await?;
 
-    let mut command = build_codex_command_with_bin(
-        codex_bin,
-        codex_args.as_deref(),
-        vec![
-            "acp".to_string(),
-            "--port".to_string(),
-            acp_port.to_string(),
-            "--cwd".to_string(),
-            entry.path.clone(),
-        ],
-    )?;
-    // Don't set current_dir — ACP uses --cwd instead.
-    // Don't set CODEX_HOME — OpenCode uses ~/.config/opencode/.
-    command.stdin(std::process::Stdio::piped());
-    command.stdout(std::process::Stdio::piped());
-    command.stderr(std::process::Stdio::piped());
+    // Ensure the shared `opencode serve` process is running.
+    let base_url = ensure_server_running(codex_bin, codex_args.as_deref()).await?;
 
-    let mut child = command.spawn().map_err(|e| e.to_string())?;
-    let stdin = child.stdin.take().ok_or("missing stdin")?;
-    let stdout = child.stdout.take().ok_or("missing stdout")?;
-    let stderr = child.stderr.take().ok_or("missing stderr")?;
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let session = Arc::new(WorkspaceSession {
         entry: entry.clone(),
-        child: Mutex::new(child),
-        stdin: Mutex::new(stdin),
-        pending: Mutex::new(HashMap::new()),
-        next_id: AtomicU64::new(1),
+        http_client,
+        base_url,
         background_thread_callbacks: Mutex::new(HashMap::new()),
         translation_state: Mutex::new(SessionTranslationState::new(String::new())),
         models_cache: Mutex::new(None),
         prewarmed_session_id: Mutex::new(None),
         prompt_lock: Mutex::new(()),
-        model_set_capability: Mutex::new(ModelSetCapability::Unknown),
-        model_set_warning_emitted: Mutex::new(false),
+        shutdown_tx,
     });
 
-    let session_clone = Arc::clone(&session);
-    let workspace_id = entry.id.clone();
-    let event_sink_clone = event_sink.clone();
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let value: Value = match serde_json::from_str(&line) {
-                Ok(value) => value,
-                Err(err) => {
-                    let payload = AppServerEvent {
-                        workspace_id: workspace_id.clone(),
-                        message: json!({
-                            "method": "codex/parseError",
-                            "params": { "error": err.to_string(), "raw": line },
-                        }),
-                    };
-                    event_sink_clone.emit_app_server_event(payload);
-                    continue;
-                }
-            };
+    spawn_sse_reader(
+        Arc::clone(&session),
+        entry.id.clone(),
+        shutdown_rx,
+        event_sink.clone(),
+    );
 
-            let maybe_id = value.get("id").and_then(|id| id.as_u64());
-            let method = value
-                .get("method")
-                .and_then(|m| m.as_str())
-                .map(String::from);
-            let has_result_or_error = value.get("result").is_some() || value.get("error").is_some();
-
-            if let Some(id) = maybe_id {
-                if has_result_or_error {
-                    // Response to a request we sent — resolve the pending oneshot.
-                    if let Some(tx) = session_clone.pending.lock().await.remove(&id) {
-                        let _ = tx.send(value);
-                    }
-                } else if let Some(ref m) = method {
-                    // JSON-RPC request FROM ACP (has id + method) — e.g. requestPermission.
-                    if m == "requestPermission" {
-                        let session_id = {
-                            session_clone
-                                .translation_state
-                                .lock()
-                                .await
-                                .session_id
-                                .clone()
-                        };
-                        if let Some(translated) =
-                            event_translator::translate_permission_request(&value, &session_id)
-                        {
-                            let payload = AppServerEvent {
-                                workspace_id: workspace_id.clone(),
-                                message: translated,
-                            };
-                            event_sink_clone.emit_app_server_event(payload);
-                        }
-                    } else {
-                        // Unknown server→client request — forward as-is.
-                        let payload = AppServerEvent {
-                            workspace_id: workspace_id.clone(),
-                            message: value,
-                        };
-                        event_sink_clone.emit_app_server_event(payload);
-                    }
-                } else if let Some(tx) = session_clone.pending.lock().await.remove(&id) {
-                    let _ = tx.send(value);
-                }
-            } else if let Some(ref m) = method {
-                // Notification (no id).
-                if m == "session/update" {
-                    // ACP sessionUpdate → translate to CodexMonitor event(s).
-                    let translated = {
-                        let mut ts = session_clone.translation_state.lock().await;
-                        event_translator::translate_acp_event(&value, &mut ts)
-                    };
-                    for msg in translated {
-                        let sent_to_background = route_translated_event_to_background_callback(
-                            &session_clone.background_thread_callbacks,
-                            &msg,
-                        )
-                        .await;
-                        if !sent_to_background {
-                            let payload = AppServerEvent {
-                                workspace_id: workspace_id.clone(),
-                                message: msg,
-                            };
-                            event_sink_clone.emit_app_server_event(payload);
-                        }
-                    }
-                } else {
-                    // Non-sessionUpdate notification — check background callbacks or forward.
-                    let thread_id = extract_thread_id(&value);
-                    let mut sent_to_background = false;
-                    if let Some(ref tid) = thread_id {
-                        let callbacks = session_clone.background_thread_callbacks.lock().await;
-                        if let Some(tx) = callbacks.get(tid) {
-                            let _ = tx.send(value.clone());
-                            sent_to_background = true;
-                        }
-                    }
-                    if !sent_to_background {
-                        let payload = AppServerEvent {
-                            workspace_id: workspace_id.clone(),
-                            message: value,
-                        };
-                        event_sink_clone.emit_app_server_event(payload);
-                    }
-                }
-            }
-        }
-
-        // Signal frontend that the ACP process has disconnected.
-        event_sink_clone.emit_app_server_event(AppServerEvent {
-            workspace_id: workspace_id.clone(),
-            message: json!({
-                "method": "codex/disconnected",
-                "params": {}
-            }),
-        });
-
-        session_clone.pending.lock().await.clear();
-    });
-
-    let workspace_id = entry.id.clone();
-    let event_sink_clone = event_sink.clone();
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let payload = AppServerEvent {
-                workspace_id: workspace_id.clone(),
-                message: json!({
-                    "method": "codex/stderr",
-                    "params": { "message": line },
-                }),
-            };
-            event_sink_clone.emit_app_server_event(payload);
-        }
-    });
-
-    let init_params = build_initialize_params(&client_version);
-    let init_result = timeout(
-        Duration::from_secs(30),
-        session.send_request("initialize", init_params),
-    )
-    .await;
-    let init_response = match init_result {
-        Ok(response) => response,
-        Err(_) => {
-            let mut child = session.child.lock().await;
-            kill_child_process_tree(&mut child).await;
-            return Err(
-                "OpenCode ACP did not respond to initialize. Check that `opencode acp` works in Terminal."
-                    .to_string(),
-            );
-        }
-    };
-    init_response?;
-    // ACP v1: no `initialized` notification needed (unlike Codex).
-
+    // Emit connected event.
     let payload = AppServerEvent {
         workspace_id: entry.id.clone(),
         message: json!({
@@ -568,40 +654,36 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     };
     event_sink.emit_app_server_event(payload);
 
-    // Eagerly create a session to pre-populate the models cache so the
-    // frontend model selector is populated before the user sends a prompt.
+    // Eagerly create a session and fetch providers to populate the model selector.
     let prewarm_session = Arc::clone(&session);
     let prewarm_sink = event_sink.clone();
     let prewarm_workspace_id = entry.id.clone();
-    let prewarm_cwd = entry.path.clone();
     tokio::spawn(async move {
-        let params = json!({
-            "cwd": prewarm_cwd,
-            "mcpServers": []
-        });
-        match prewarm_session.send_request("session/new", params).await {
+        // Create a session.
+        match prewarm_session.rest_post("/session", json!({})).await {
             Ok(response) => {
                 let session_id = response
-                    .get("result")
-                    .and_then(|r| r.get("sessionId"))
-                    .or_else(|| response.get("sessionId"))
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
 
-                if let Some(models) = response
-                    .get("result")
-                    .unwrap_or(&response)
-                    .get("models")
-                    .cloned()
-                {
-                    *prewarm_session.models_cache.lock().await = Some(models);
-                }
-
                 if !session_id.is_empty() {
-                    *prewarm_session.prewarmed_session_id.lock().await =
-                        Some(session_id);
+                    *prewarm_session.prewarmed_session_id.lock().await = Some(session_id);
                 }
+            }
+            Err(err) => {
+                eprintln!(
+                    "Pre-warm POST /session failed for {}: {}",
+                    prewarm_workspace_id, err
+                );
+            }
+        }
+
+        // Fetch provider/model config.
+        match prewarm_session.rest_get("/config/providers").await {
+            Ok(providers) => {
+                *prewarm_session.models_cache.lock().await = Some(providers);
 
                 let payload = AppServerEvent {
                     workspace_id: prewarm_workspace_id.clone(),
@@ -614,7 +696,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
             }
             Err(err) => {
                 eprintln!(
-                    "Pre-warm session/new failed for {}: {}",
+                    "Pre-warm GET /config/providers failed for {}: {}",
                     prewarm_workspace_id, err
                 );
             }
@@ -624,11 +706,21 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     Ok(session)
 }
 
+/// Shut down the shared OpenCode server process (called on app exit).
+pub(crate) async fn shutdown_server() {
+    if let Some(server_mutex) = SERVER_PROCESS.get() {
+        let mut server = server_mutex.lock().await;
+        let _ = kill_child_process_tree(&mut server.child).await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_initialize_params, extract_thread_id, route_translated_event_to_background_callback,
-    };
+    use super::{extract_thread_id, route_translated_event_to_background_callback};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use tokio::runtime::Builder;
@@ -650,17 +742,6 @@ mod tests {
     fn extract_thread_id_returns_none_when_missing() {
         let value = json!({ "params": {} });
         assert_eq!(extract_thread_id(&value), None);
-    }
-
-    #[test]
-    fn build_initialize_params_sets_protocol_version() {
-        let params = build_initialize_params("1.2.3");
-        assert_eq!(
-            params
-                .get("protocolVersion")
-                .and_then(|value| value.as_u64()),
-            Some(1)
-        );
     }
 
     #[test]
@@ -707,5 +788,21 @@ mod tests {
             let routed = route_translated_event_to_background_callback(&callbacks, &event).await;
             assert!(!routed);
         });
+    }
+
+    #[test]
+    fn urlencoding_handles_special_chars() {
+        assert_eq!(
+            super::urlencoding::encode("/tmp/test"),
+            "%2Ftmp%2Ftest"
+        );
+        assert_eq!(
+            super::urlencoding::encode("hello world"),
+            "hello%20world"
+        );
+        assert_eq!(
+            super::urlencoding::encode("abc-def_123.txt~"),
+            "abc-def_123.txt~"
+        );
     }
 }

@@ -9,7 +9,6 @@ use uuid::Uuid;
 use crate::backend::app_server::WorkspaceSession;
 use crate::codex::args::resolve_workspace_codex_args;
 use crate::codex::home::resolve_workspace_codex_home;
-use crate::shared::process_core::kill_child_process_tree;
 use crate::shared::{git_core, worktree_core};
 use crate::storage::write_workspaces;
 use crate::types::{AppSettings, WorkspaceEntry, WorkspaceInfo, WorkspaceKind, WorkspaceSettings};
@@ -70,8 +69,7 @@ where
             let mut workspaces = workspaces.lock().await;
             workspaces.remove(&entry.id);
         }
-        let mut child = session.child.lock().await;
-        kill_child_process_tree(&mut child).await;
+        drop(session);
         return Err(error);
     }
 
@@ -201,8 +199,7 @@ where
             let mut workspaces = workspaces.lock().await;
             workspaces.remove(&entry.id);
         }
-        let mut child = session.child.lock().await;
-        kill_child_process_tree(&mut child).await;
+        drop(session);
         let _ = tokio::fs::remove_dir_all(&destination_path).await;
         return Err(error);
     }
@@ -428,14 +425,10 @@ where
                 return Err(error);
             }
         };
-        if let Some(old_session) = sessions
+        sessions
             .lock()
             .await
-            .insert(entry_snapshot.id.clone(), new_session)
-        {
-            let mut child = old_session.child.lock().await;
-            kill_child_process_tree(&mut child).await;
-        }
+            .insert(entry_snapshot.id.clone(), new_session);
     }
     if codex_home_changed || codex_args_changed {
         let app_settings_snapshot = app_settings.lock().await.clone();
@@ -477,10 +470,7 @@ where
                     continue;
                 }
             };
-            if let Some(old_session) = sessions.lock().await.insert(child.id.clone(), new_session) {
-                let mut child = old_session.child.lock().await;
-                kill_child_process_tree(&mut child).await;
-            }
+            sessions.lock().await.insert(child.id.clone(), new_session);
         }
     }
     if worktree_setup_script_changed && !entry_snapshot.kind.is_worktree() {

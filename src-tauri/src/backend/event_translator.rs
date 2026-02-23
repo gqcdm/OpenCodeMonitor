@@ -1,34 +1,35 @@
-//! Translates ACP `session/update` notifications into CodexMonitor-shaped
+//! Translates OpenCode REST SSE events into CodexMonitor-shaped
 //! `AppServerEvent` messages that the React frontend already knows how to
 //! consume.
 //!
 //! Design invariant (INV4 from spec): the frontend thread reducer receives
 //! events in the **same shape** as the original CodexMonitor protocol. All
-//! ACP ↔ CodexMonitor translation happens here in Rust.
+//! OpenCode ↔ CodexMonitor translation happens here in Rust.
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Per-session state the translator needs to synthesize IDs the frontend
-/// expects but ACP does not provide (turn IDs, monotonic item IDs, etc.).
+/// expects but the REST SSE protocol does not provide (turn IDs, monotonic
+/// item IDs, etc.).
 pub(crate) struct SessionTranslationState {
-    /// The session ID from ACP (maps to CodexMonitor's "threadId").
+    /// The session ID (maps to CodexMonitor's "threadId").
     pub(crate) session_id: String,
-    /// Synthesized turn ID.  Incremented each time `session/prompt` is called.
+    /// Synthesized turn ID.  Incremented each time a prompt is sent.
     pub(crate) current_turn_id: String,
     /// Counter for synthesizing unique item IDs.
     item_counter: AtomicU64,
-    /// Map ACP `toolCallId` → synthesized CodexMonitor `itemId`.
+    /// Map tool Part `id` → synthesized CodexMonitor `itemId`.
     tool_call_items: HashMap<String, String>,
     /// Stable item ID for the current agent-message stream.
     agent_message_item_id: Option<String>,
     /// Stable item ID for the current reasoning stream.
     reasoning_item_id: Option<String>,
     /// Stable item ID for contiguous user-message chunk streams.
-    user_message_item_id: Option<String>,
+    pub(crate) user_message_item_id: Option<String>,
     /// Buffered text for contiguous user-message chunk streams.
-    user_message_text: String,
+    pub(crate) user_message_text: String,
 }
 
 impl SessionTranslationState {
@@ -50,7 +51,7 @@ impl SessionTranslationState {
         format!("item_{n}")
     }
 
-    /// Start a new turn (called before `session/prompt`).  Resets per-turn
+    /// Start a new turn (called before sending a prompt). Resets per-turn
     /// ephemeral state so the next batch of events gets fresh item IDs.
     pub(crate) fn start_turn(&mut self, turn_id: String) {
         self.current_turn_id = turn_id;
@@ -61,7 +62,7 @@ impl SessionTranslationState {
         self.user_message_text.clear();
     }
 
-    /// Prepare translation state for replaying historical session updates.
+    /// Prepare translation state for replaying historical messages.
     pub(crate) fn prepare_replay(&mut self, session_id: String) {
         self.session_id = session_id;
         self.current_turn_id.clear();
@@ -72,8 +73,6 @@ impl SessionTranslationState {
         self.user_message_text.clear();
     }
 
-    /// Get or create the stable item-id for the agent message stream within
-    /// the current turn.
     fn agent_message_item(&mut self) -> String {
         if let Some(ref id) = self.agent_message_item_id {
             id.clone()
@@ -84,8 +83,6 @@ impl SessionTranslationState {
         }
     }
 
-    /// Get or create the stable item-id for the reasoning stream within
-    /// the current turn.
     fn reasoning_item(&mut self) -> String {
         if let Some(ref id) = self.reasoning_item_id {
             id.clone()
@@ -96,7 +93,7 @@ impl SessionTranslationState {
         }
     }
 
-    fn user_message_item(&mut self) -> String {
+    pub(crate) fn user_message_item(&mut self) -> String {
         if let Some(ref id) = self.user_message_item_id {
             id.clone()
         } else {
@@ -106,10 +103,7 @@ impl SessionTranslationState {
         }
     }
 
-    fn mark_new_replayed_user_message_boundary(&mut self) {
-        // ACP replay has no turn lifecycle markers. Treat each replayed user
-        // message as a boundary so assistant/reasoning streams do not merge
-        // across historical turns.
+    pub(crate) fn mark_new_replayed_user_message_boundary(&mut self) {
         self.tool_call_items.clear();
         self.agent_message_item_id = None;
         self.reasoning_item_id = None;
@@ -117,97 +111,83 @@ impl SessionTranslationState {
 }
 
 // ---------------------------------------------------------------------------
-// Public translation entry point
+// Public translation entry points
 // ---------------------------------------------------------------------------
 
-/// Attempt to translate an ACP `session/update` notification into one or more
-/// CodexMonitor-shaped JSON-RPC messages (method + params).
+/// Translate an OpenCode REST SSE event into one or more CodexMonitor-shaped
+/// JSON-RPC messages (method + params).
 ///
-/// Returns `None` when the event should be silently dropped (e.g.
-/// `available_commands_update` which has no frontend equivalent).
+/// SSE events have shape: `{ type: "<event_type>", properties: { ... } }`
 ///
-/// Some ACP events map to *multiple* CodexMonitor events (e.g. a tool_call
-/// with status "pending" emits both an `item/started` and potentially a delta).
-/// The caller should emit all returned values in order.
-pub(crate) fn translate_acp_event(
-    acp_notification: &Value,
+/// Returns an empty Vec when the event should be silently dropped.
+pub(crate) fn translate_sse_event(
+    sse_event: &Value,
     state: &mut SessionTranslationState,
 ) -> Vec<Value> {
-    // ACP notifications look like:
-    // { "method": "session/update",
-    //   "params": { "sessionId": "...",
-    //               "update": { "sessionUpdate": "<type>", ...payload } } }
-    let params = match acp_notification.get("params") {
-        Some(p) => p,
-        None => return vec![],
-    };
-    let update = match params.get("update") {
-        Some(u) => u,
-        None => return vec![],
-    };
-    let update_type = match update.get("sessionUpdate").and_then(|v| v.as_str()) {
+    let event_type = match sse_event.get("type").and_then(|v| v.as_str()) {
         Some(t) => t,
         None => return vec![],
     };
+    let properties = sse_event.get("properties").unwrap_or(&Value::Null);
 
-    let event_session_id = params
-        .get("sessionId")
+    match event_type {
+        "message.part.updated" => translate_part_updated(properties, state),
+        "message.updated" => translate_message_updated(properties, state),
+        "session.status" => translate_session_status(properties, state),
+        "permission.updated" => translate_sse_permission(properties, state),
+        _ => {
+            #[cfg(debug_assertions)]
+            eprintln!("[event_translator] unknown SSE event type: {event_type}");
+            vec![]
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// message.part.updated — the main event for streaming content
+// ---------------------------------------------------------------------------
+
+fn translate_part_updated(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+    let part = match properties.get("part") {
+        Some(p) => p,
+        None => return vec![],
+    };
+    let delta = properties
+        .get("delta")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    if !event_session_id.is_empty() {
-        state.session_id = event_session_id.to_string();
+
+    let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Extract session ID from the part if available.
+    if let Some(sid) = part.get("sessionID").and_then(|v| v.as_str()) {
+        if !sid.is_empty() {
+            state.session_id = sid.to_string();
+        }
     }
-    let thread_id = if !event_session_id.is_empty() {
-        event_session_id.to_string()
-    } else {
-        state.session_id.clone()
-    };
+    let thread_id = state.session_id.clone();
     let turn_id = state.current_turn_id.clone();
 
-    if update_type != "user_message_chunk" {
-        state.user_message_item_id = None;
-        state.user_message_text.clear();
-    }
+    match part_type {
+        "text" => {
+            if delta.is_empty() {
+                return vec![];
+            }
 
-    match update_type {
-        "user_message_chunk" => {
-            // Foreground sends emit synthetic user items before session/prompt.
-            // Translate ACP user chunks only for replay to avoid duplicates.
-            if !state.current_turn_id.is_empty() {
-                return vec![];
-            }
-            let text = extract_chunk_text(update);
-            if text.is_empty() {
-                return vec![];
-            }
-            if state.user_message_item_id.is_none() {
-                state.mark_new_replayed_user_message_boundary();
-            }
-            let item_id = state.user_message_item();
-            state.user_message_text.push_str(&text);
-            vec![json!({
-                "method": "item/completed",
-                "params": {
-                    "threadId": thread_id,
-                    "item": {
-                        "id": item_id,
-                        "type": "userMessage",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": state.user_message_text
-                            }
-                        ]
-                    }
-                }
-            })]
-        }
+            // Check message role to distinguish user vs assistant text.
+            let message_role = part
+                .get("messageID")
+                .and_then(|_| properties.get("part"))
+                .and_then(|_| {
+                    // If we're in replay mode (no turn ID), text parts from
+                    // user messages should be emitted as userMessage items.
+                    // The REST API doesn't give us explicit role on the Part,
+                    // but during replay we infer from turn state.
+                    None::<&str>
+                });
+            let _ = message_role; // Unused for now; user messages handled separately.
 
-        "agent_message_chunk" => {
-            let text = extract_chunk_text(update);
-            if text.is_empty() {
-                return vec![];
-            }
+            // In active turn mode, text deltas are agent message chunks.
             let item_id = state.agent_message_item();
             vec![json!({
                 "method": "item/agentMessage/delta",
@@ -215,14 +195,13 @@ pub(crate) fn translate_acp_event(
                     "threadId": thread_id,
                     "turnId": turn_id,
                     "itemId": item_id,
-                    "delta": text
+                    "delta": delta
                 }
             })]
         }
 
-        "agent_thought_chunk" => {
-            let text = extract_chunk_text(update);
-            if text.is_empty() {
+        "reasoning" => {
+            if delta.is_empty() {
                 return vec![];
             }
             let item_id = state.reasoning_item();
@@ -232,90 +211,328 @@ pub(crate) fn translate_acp_event(
                     "threadId": thread_id,
                     "turnId": turn_id,
                     "itemId": item_id,
-                    "delta": text
+                    "delta": delta
                 }
             })]
         }
 
-        // -----------------------------------------------------------------
-        // Tool call lifecycle: pending → in_progress → completed|failed
-        // -----------------------------------------------------------------
-        "tool_call" => translate_tool_call(update, state, &thread_id),
-        "tool_call_update" => translate_tool_call_update(update, state, &thread_id),
+        "tool" => translate_tool_part(part, state, &thread_id),
 
-        // -----------------------------------------------------------------
-        // Usage / token tracking
-        // -----------------------------------------------------------------
-        "usage_update" => {
-            // ACP shape: { used, size, cost: { amount, currency } }
-            let used = update.get("used").and_then(|v| v.as_u64()).unwrap_or(0);
-            let size = update.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
-            vec![json!({
-                "method": "thread/tokenUsage/updated",
+        _ => vec![],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool part translation
+// ---------------------------------------------------------------------------
+
+fn translate_tool_part(
+    part: &Value,
+    state: &mut SessionTranslationState,
+    thread_id: &str,
+) -> Vec<Value> {
+    let tool_state = match part.get("state") {
+        Some(s) => s,
+        None => return vec![],
+    };
+    let status = tool_state
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("pending");
+    let tool_name = part
+        .get("tool")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let part_id = part.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+
+    let item_id = if let Some(existing) = state.tool_call_items.get(part_id) {
+        existing.clone()
+    } else {
+        let id = state.next_item_id();
+        if !part_id.is_empty() {
+            state
+                .tool_call_items
+                .insert(part_id.to_string(), id.clone());
+        }
+        id
+    };
+
+    let item_type = tool_kind_to_item_type(tool_name);
+    let raw_input = tool_state.get("input").cloned();
+
+    let mut events = Vec::new();
+
+    match status {
+        "pending" | "running" => {
+            let started_item = build_tool_item(
+                &item_id,
+                item_type,
+                tool_name,
+                "in_progress",
+                raw_input.as_ref(),
+                None,
+                None,
+            );
+            events.push(json!({
+                "method": "item/started",
                 "params": {
                     "threadId": thread_id,
-                    "tokenUsage": {
-                        "total": {
-                            "totalTokens": used,
-                            "inputTokens": used,
-                            "cachedInputTokens": 0,
-                            "outputTokens": 0,
-                            "reasoningOutputTokens": 0
-                        },
-                        "last": {
-                            "totalTokens": used,
-                            "inputTokens": used,
-                            "cachedInputTokens": 0,
-                            "outputTokens": 0,
-                            "reasoningOutputTokens": 0
-                        },
-                        "modelContextWindow": size
+                    "item": started_item
+                }
+            }));
+
+            if let Some(ref input) = raw_input {
+                let delta_text = serde_json::to_string_pretty(input).unwrap_or_default();
+                if !delta_text.is_empty() {
+                    let method = if item_type == "fileChange" {
+                        "item/fileChange/outputDelta"
+                    } else {
+                        "item/commandExecution/outputDelta"
+                    };
+                    events.push(json!({
+                        "method": method,
+                        "params": {
+                            "threadId": thread_id,
+                            "itemId": item_id,
+                            "delta": delta_text
+                        }
+                    }));
+                }
+            }
+        }
+        "completed" => {
+            let output_text = tool_state
+                .get("output")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let item = build_tool_item(
+                &item_id,
+                item_type,
+                tool_name,
+                "completed",
+                raw_input.as_ref(),
+                Some(output_text),
+                None,
+            );
+            events.push(json!({
+                "method": "item/completed",
+                "params": {
+                    "threadId": thread_id,
+                    "item": item
+                }
+            }));
+        }
+        "error" => {
+            let error_text = tool_state
+                .get("output")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let item = build_tool_item(
+                &item_id,
+                item_type,
+                tool_name,
+                "failed",
+                raw_input.as_ref(),
+                Some(error_text),
+                None,
+            );
+            events.push(json!({
+                "method": "item/completed",
+                "params": {
+                    "threadId": thread_id,
+                    "item": item
+                }
+            }));
+        }
+        _ => {}
+    }
+
+    events
+}
+
+// ---------------------------------------------------------------------------
+// message.updated — token/usage info
+// ---------------------------------------------------------------------------
+
+fn translate_message_updated(
+    properties: &Value,
+    state: &mut SessionTranslationState,
+) -> Vec<Value> {
+    let info = match properties.get("info") {
+        Some(i) => i,
+        None => return vec![],
+    };
+    let thread_id = state.session_id.clone();
+
+    // Extract token usage from message info if available.
+    let input_tokens = info
+        .get("inputTokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let output_tokens = info
+        .get("outputTokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cached_tokens = info
+        .get("cachedInputTokens")
+        .or_else(|| info.get("cacheReadInputTokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let reasoning_tokens = info
+        .get("reasoningOutputTokens")
+        .or_else(|| info.get("reasoningTokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let total = input_tokens + output_tokens;
+
+    if total == 0 {
+        return vec![];
+    }
+
+    vec![json!({
+        "method": "thread/tokenUsage/updated",
+        "params": {
+            "threadId": thread_id,
+            "tokenUsage": {
+                "total": {
+                    "totalTokens": total,
+                    "inputTokens": input_tokens,
+                    "cachedInputTokens": cached_tokens,
+                    "outputTokens": output_tokens,
+                    "reasoningOutputTokens": reasoning_tokens
+                },
+                "last": {
+                    "totalTokens": total,
+                    "inputTokens": input_tokens,
+                    "cachedInputTokens": cached_tokens,
+                    "outputTokens": output_tokens,
+                    "reasoningOutputTokens": reasoning_tokens
+                },
+                "modelContextWindow": 0
+            }
+        }
+    })]
+}
+
+// ---------------------------------------------------------------------------
+// session.status — idle/active/error transitions
+// ---------------------------------------------------------------------------
+
+fn translate_session_status(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+    let session_id = properties
+        .get("sessionID")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if !session_id.is_empty() {
+        state.session_id = session_id.to_string();
+    }
+
+    let status = properties
+        .get("status")
+        .and_then(|s| s.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let thread_id = state.session_id.clone();
+    let turn_id = state.current_turn_id.clone();
+
+    match status {
+        "idle" => {
+            // Idle after active means the turn is done.
+            if !turn_id.is_empty() {
+                let mut events = Vec::new();
+                if let Some(msg_completed) = build_agent_message_completed(state) {
+                    events.push(msg_completed);
+                }
+                events.push(build_turn_completed(&thread_id, &turn_id));
+                events
+            } else {
+                vec![]
+            }
+        }
+        "error" => {
+            let error_msg = properties
+                .get("status")
+                .and_then(|s| s.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            vec![json!({
+                "method": "error",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "willRetry": false,
+                    "error": {
+                        "message": error_msg
                     }
                 }
             })]
         }
-
-        "plan" => {
-            let explanation = update
-                .get("explanation")
-                .cloned()
-                .or_else(|| update.get("text").cloned())
-                .unwrap_or(Value::Null);
-            let plan = update
-                .get("plan")
-                .cloned()
-                .or_else(|| update.get("steps").cloned())
-                .unwrap_or(Value::Null);
-            vec![json!({
-                "method": "turn/plan/updated",
-                "params": {
-                    "threadId": thread_id,
-                    "turnId": turn_id,
-                    "explanation": explanation,
-                    "plan": plan
-                }
-            })]
-        }
-
-        // -----------------------------------------------------------------
-        // Events we intentionally drop for MVP
-        // -----------------------------------------------------------------
-        "available_commands_update" => vec![],
-
-        // Unknown event type — drop silently but log in debug builds.
-        other => {
-            #[cfg(debug_assertions)]
-            eprintln!("[event_translator] unknown sessionUpdate type: {other}");
-            vec![]
-        }
+        _ => vec![],
     }
+}
+
+// ---------------------------------------------------------------------------
+// permission.updated — permission requests from the agent
+// ---------------------------------------------------------------------------
+
+fn translate_sse_permission(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+    let permission_id = properties
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let session_id = properties
+        .get("sessionID")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&state.session_id);
+    let perm_type = properties
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("command");
+    let pattern = properties.get("pattern");
+
+    // Encode sessionId:permissionId into the event `id` so the frontend
+    // can round-trip it back to `respond_to_server_request`.
+    let composite_id = format!("{session_id}:{permission_id}");
+
+    let command_label = if let Some(pat) = pattern {
+        if let Some(arr) = pat.as_array() {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            pat.as_str().unwrap_or(perm_type).to_string()
+        }
+    } else {
+        perm_type.to_string()
+    };
+
+    vec![json!({
+        "id": composite_id,
+        "method": "codex/requestApproval",
+        "params": {
+            "threadId": session_id,
+            "type": perm_type,
+            "command": [command_label],
+            "rawInput": {}
+        }
+    })]
+}
+
+/// Build the REST body for a permission decision.
+///
+/// `accept` = true  → `{ response: "allow" }`
+/// `accept` = false → `{ response: "deny" }`
+pub(crate) fn build_permission_response(accept: bool) -> Value {
+    let response = if accept { "allow" } else { "deny" };
+    json!({ "response": response })
 }
 
 // ---------------------------------------------------------------------------
 // Synthetic turn events
 // ---------------------------------------------------------------------------
 
-/// Build a synthetic `turn/started` message.
 pub(crate) fn build_turn_started(session_id: &str, turn_id: &str) -> Value {
     json!({
         "method": "turn/started",
@@ -329,7 +546,6 @@ pub(crate) fn build_turn_started(session_id: &str, turn_id: &str) -> Value {
     })
 }
 
-/// Build a synthetic `turn/completed` message.
 pub(crate) fn build_turn_completed(session_id: &str, turn_id: &str) -> Value {
     json!({
         "method": "turn/completed",
@@ -343,7 +559,6 @@ pub(crate) fn build_turn_completed(session_id: &str, turn_id: &str) -> Value {
     })
 }
 
-/// Build a synthetic `item/completed` for the agent message item at turn end.
 pub(crate) fn build_agent_message_completed(state: &SessionTranslationState) -> Option<Value> {
     let item_id = state.agent_message_item_id.as_ref()?;
     Some(json!({
@@ -363,12 +578,11 @@ pub(crate) fn build_agent_message_completed(state: &SessionTranslationState) -> 
 // Tool call helpers
 // ---------------------------------------------------------------------------
 
-/// Map ACP tool `kind` to CodexMonitor item type.
 fn tool_kind_to_item_type(kind: &str) -> &str {
     match kind {
         "edit" | "write" | "create" => "fileChange",
         "bash" | "command" | "terminal" => "commandExecution",
-        _ => "commandExecution", // default to commandExecution for unknown kinds
+        _ => "commandExecution",
     }
 }
 
@@ -418,57 +632,6 @@ fn file_path_from_raw_input(raw_input: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-fn parse_file_changes_from_content(update: &Value) -> Vec<Value> {
-    let content = match update.get("content").and_then(|value| value.as_array()) {
-        Some(content) => content,
-        None => return Vec::new(),
-    };
-    content
-        .iter()
-        .filter(|entry| entry.get("type").and_then(|value| value.as_str()) == Some("diff"))
-        .filter_map(|entry| {
-            let path = entry.get("path").and_then(|value| value.as_str())?.trim();
-            if path.is_empty() {
-                return None;
-            }
-            let old_text = entry
-                .get("oldText")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            let new_text = entry
-                .get("newText")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            let kind = if old_text.is_empty() && !new_text.is_empty() {
-                "add"
-            } else if !old_text.is_empty() && new_text.is_empty() {
-                "delete"
-            } else {
-                "modify"
-            };
-            let diff = if old_text.is_empty() && new_text.is_empty() {
-                None
-            } else {
-                let mut lines = Vec::new();
-                lines.push(format!("--- {path}"));
-                lines.push(format!("+++ {path}"));
-                for line in old_text.lines() {
-                    lines.push(format!("-{line}"));
-                }
-                for line in new_text.lines() {
-                    lines.push(format!("+{line}"));
-                }
-                Some(lines.join("\n"))
-            };
-            Some(json!({
-                "path": path,
-                "kind": kind,
-                "diff": diff
-            }))
-        })
-        .collect()
 }
 
 fn build_tool_item(
@@ -537,293 +700,6 @@ fn build_tool_item(
     item
 }
 
-fn translate_tool_call(
-    update: &Value,
-    state: &mut SessionTranslationState,
-    thread_id: &str,
-) -> Vec<Value> {
-    let tool_call_id = update
-        .get("toolCallId")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let title = update
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let kind = update
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("command");
-    let status = update
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("pending");
-
-    // Assign a stable item ID for this tool call.
-    let item_id = state.next_item_id();
-    state
-        .tool_call_items
-        .insert(tool_call_id.to_string(), item_id.clone());
-
-    let item_type = tool_kind_to_item_type(kind);
-
-    if status == "pending" {
-        // Emit item/started
-        let item = build_tool_item(&item_id, item_type, title, "in_progress", None, None, None);
-        vec![json!({
-            "method": "item/started",
-            "params": {
-                "threadId": thread_id,
-                "item": item
-            }
-        })]
-    } else {
-        vec![]
-    }
-}
-
-fn translate_tool_call_update(
-    update: &Value,
-    state: &mut SessionTranslationState,
-    thread_id: &str,
-) -> Vec<Value> {
-    let tool_call_id = update
-        .get("toolCallId")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("");
-
-    let item_id = match state.tool_call_items.get(tool_call_id) {
-        Some(id) => id.clone(),
-        None => {
-            // We haven't seen the initial tool_call for this ID.  Synthesize one.
-            let id = state.next_item_id();
-            state
-                .tool_call_items
-                .insert(tool_call_id.to_string(), id.clone());
-            id
-        }
-    };
-
-    let kind = update
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("command");
-    let item_type = tool_kind_to_item_type(kind);
-    let title = update
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-
-    let mut events = Vec::new();
-
-    match status {
-        "in_progress" => {
-            let raw_input = update.get("rawInput");
-            let started_item = build_tool_item(
-                &item_id,
-                item_type,
-                title,
-                "in_progress",
-                raw_input,
-                None,
-                None,
-            );
-            events.push(json!({
-                "method": "item/started",
-                "params": {
-                    "threadId": thread_id,
-                    "item": started_item
-                }
-            }));
-
-            // Emit output delta if there's rawInput to show.
-            if let Some(input) = raw_input {
-                let delta_text = serde_json::to_string_pretty(input).unwrap_or_default();
-                if !delta_text.is_empty() {
-                    let method = if item_type == "fileChange" {
-                        "item/fileChange/outputDelta"
-                    } else {
-                        "item/commandExecution/outputDelta"
-                    };
-                    events.push(json!({
-                        "method": method,
-                        "params": {
-                            "threadId": thread_id,
-                            "itemId": item_id,
-                            "delta": delta_text
-                        }
-                    }));
-                }
-            }
-        }
-        "completed" => {
-            // Extract output text from content array.
-            let output_text = extract_tool_output(update);
-            let item = build_tool_item(
-                &item_id,
-                item_type,
-                title,
-                "completed",
-                update.get("rawInput"),
-                Some(&output_text),
-                Some(parse_file_changes_from_content(update)),
-            );
-            events.push(json!({
-                "method": "item/completed",
-                "params": {
-                    "threadId": thread_id,
-                    "item": item
-                }
-            }));
-        }
-        "failed" => {
-            let error_text = extract_tool_output(update);
-            let item = build_tool_item(
-                &item_id,
-                item_type,
-                title,
-                "failed",
-                update.get("rawInput"),
-                Some(&error_text),
-                Some(parse_file_changes_from_content(update)),
-            );
-            events.push(json!({
-                "method": "item/completed",
-                "params": {
-                    "threadId": thread_id,
-                    "item": item
-                }
-            }));
-        }
-        _ => {}
-    }
-
-    events
-}
-
-/// Extract text output from an ACP tool_call_update's `content` array.
-fn extract_tool_output(update: &Value) -> String {
-    let content = match update.get("content").and_then(|v| v.as_array()) {
-        Some(arr) => arr,
-        None => return String::new(),
-    };
-    let mut parts = Vec::new();
-    for entry in content {
-        // Entries can be: { type: "content", content: { type: "text", text: "..." } }
-        //                  { type: "diff", path, oldText, newText }
-        if let Some(inner) = entry.get("content") {
-            if let Some(text) = inner.get("text").and_then(|v| v.as_str()) {
-                parts.push(text.to_string());
-            }
-        } else if entry.get("type").and_then(|v| v.as_str()) == Some("diff") {
-            // Format diff for display.
-            let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            let old = entry.get("oldText").and_then(|v| v.as_str()).unwrap_or("");
-            let new = entry.get("newText").and_then(|v| v.as_str()).unwrap_or("");
-            if !path.is_empty() {
-                parts.push(format!("--- {path}\n+++ {path}"));
-            }
-            if !old.is_empty() || !new.is_empty() {
-                // Simple unified-ish diff representation.
-                for line in old.lines() {
-                    parts.push(format!("-{line}"));
-                }
-                for line in new.lines() {
-                    parts.push(format!("+{line}"));
-                }
-            }
-        }
-    }
-    parts.join("\n")
-}
-
-fn extract_chunk_text(update: &Value) -> String {
-    if let Some(text) = update.get("text").and_then(|v| v.as_str()) {
-        if !text.is_empty() {
-            return text.to_string();
-        }
-    }
-
-    let content = match update.get("content") {
-        Some(content) => content,
-        None => return String::new(),
-    };
-
-    if let Some(text) = content.get("text").and_then(|v| v.as_str()) {
-        return text.to_string();
-    }
-
-    if let Some(parts) = content.as_array() {
-        let mut text_parts = Vec::new();
-        for part in parts {
-            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                if !text.is_empty() {
-                    text_parts.push(text);
-                }
-            }
-        }
-        return text_parts.join("");
-    }
-
-    String::new()
-}
-
-// ---------------------------------------------------------------------------
-// Permission / approval translation
-// ---------------------------------------------------------------------------
-
-/// Translate an ACP `requestPermission` JSON-RPC request into a
-/// CodexMonitor-shaped approval request that the frontend already handles.
-///
-/// Returns `None` if the message doesn't look like a permission request.
-pub(crate) fn translate_permission_request(acp_request: &Value, session_id: &str) -> Option<Value> {
-    let method = acp_request.get("method").and_then(|v| v.as_str())?;
-    if method != "requestPermission" {
-        return None;
-    }
-    let id = acp_request.get("id")?;
-    let params = acp_request.get("params")?;
-    let tool_call = params.get("toolCall")?;
-
-    let kind = tool_call
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("command");
-    let title = tool_call
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let raw_input = tool_call.get("rawInput").cloned().unwrap_or(json!({}));
-
-    // Build a CodexMonitor-shaped approval request.
-    // The frontend checks method.endsWith("requestApproval").
-    Some(json!({
-        "id": id,
-        "method": "codex/requestApproval",
-        "params": {
-            "threadId": session_id,
-            "type": kind,
-            "command": [title],
-            "rawInput": raw_input
-        }
-    }))
-}
-
-/// Build the ACP response for a permission decision.
-///
-/// `accept` = true  → `{ outcome: "selected", optionId: "once" }`
-/// `accept` = false → `{ outcome: "selected", optionId: "reject" }`
-pub(crate) fn build_permission_response(accept: bool) -> Value {
-    let option_id = if accept { "once" } else { "reject" };
-    json!({
-        "outcome": {
-            "outcome": "selected",
-            "optionId": option_id
-        }
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -840,113 +716,108 @@ mod tests {
     }
 
     #[test]
-    fn agent_message_chunk_produces_delta() {
+    fn text_part_produces_agent_message_delta() {
         let mut state = make_state();
-        let notification = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {
-                        "type": "text",
-                        "text": "Hello world"
-                    }
-                }
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "part_1",
+                    "sessionID": "ses_test123",
+                    "text": "Hello world"
+                },
+                "delta": "Hello world"
             }
         });
-        let events = translate_acp_event(&notification, &mut state);
+        let events = translate_sse_event(&event, &mut state);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "item/agentMessage/delta");
         assert_eq!(events[0]["params"]["threadId"], "ses_test123");
         assert_eq!(events[0]["params"]["delta"], "Hello world");
         // Same item ID on second call.
         let item_id = events[0]["params"]["itemId"].as_str().unwrap().to_string();
-        let events2 = translate_acp_event(&notification, &mut state);
+        let events2 = translate_sse_event(&event, &mut state);
         assert_eq!(events2[0]["params"]["itemId"].as_str().unwrap(), item_id);
     }
 
     #[test]
-    fn agent_thought_chunk_produces_reasoning_delta() {
+    fn reasoning_part_produces_reasoning_delta() {
         let mut state = make_state();
-        let notification = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "agent_thought_chunk",
-                    "content": {
-                        "type": "text",
-                        "text": "Let me think..."
-                    }
-                }
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "reasoning",
+                    "id": "part_r1",
+                    "sessionID": "ses_test123"
+                },
+                "delta": "Let me think..."
             }
         });
-        let events = translate_acp_event(&notification, &mut state);
+        let events = translate_sse_event(&event, &mut state);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "item/reasoning/textDelta");
         assert_eq!(events[0]["params"]["delta"], "Let me think...");
     }
 
     #[test]
-    fn tool_call_pending_produces_item_started() {
+    fn tool_part_pending_produces_item_started() {
         let mut state = make_state();
-        let notification = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "tool_call",
-                    "toolCallId": "tc_1",
-                    "title": "read",
-                    "kind": "read",
-                    "status": "pending"
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_1",
+                    "sessionID": "ses_test123",
+                    "tool": "bash",
+                    "state": {
+                        "status": "running",
+                        "input": { "command": ["ls", "-la"] }
+                    }
                 }
             }
         });
-        let events = translate_acp_event(&notification, &mut state);
-        assert_eq!(events.len(), 1);
+        let events = translate_sse_event(&event, &mut state);
+        assert!(events.len() >= 1);
         assert_eq!(events[0]["method"], "item/started");
         assert_eq!(events[0]["params"]["item"]["type"], "commandExecution");
-        assert_eq!(events[0]["params"]["item"]["command"][0], "read");
     }
 
     #[test]
-    fn tool_call_update_completed_produces_item_completed() {
+    fn tool_part_completed_produces_item_completed() {
         let mut state = make_state();
-        // First, register the tool call.
-        let tc = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "tool_call",
-                    "toolCallId": "tc_2",
-                    "title": "write",
-                    "kind": "edit",
-                    "status": "pending"
+        // First register the tool.
+        let running = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_2",
+                    "tool": "edit",
+                    "state": { "status": "running", "input": { "filePath": "foo.rs" } }
                 }
             }
         });
-        translate_acp_event(&tc, &mut state);
+        translate_sse_event(&running, &mut state);
 
-        let update = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "tool_call_update",
-                    "toolCallId": "tc_2",
-                    "kind": "edit",
-                    "title": "write",
-                    "status": "completed",
-                    "content": [
-                        { "type": "content", "content": { "type": "text", "text": "File written." } }
-                    ]
+        let completed = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_2",
+                    "tool": "edit",
+                    "state": {
+                        "status": "completed",
+                        "input": { "filePath": "foo.rs" },
+                        "output": "File written."
+                    }
                 }
             }
         });
-        let events = translate_acp_event(&update, &mut state);
+        let events = translate_sse_event(&completed, &mut state);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "item/completed");
         assert_eq!(events[0]["params"]["item"]["type"], "fileChange");
@@ -954,107 +825,83 @@ mod tests {
     }
 
     #[test]
-    fn usage_update_produces_token_usage() {
+    fn message_updated_produces_token_usage() {
         let mut state = make_state();
-        let notification = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "usage_update",
-                    "used": 5000,
-                    "size": 200000,
-                    "cost": { "amount": 0.05, "currency": "USD" }
+        let event = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "inputTokens": 5000,
+                    "outputTokens": 1000,
+                    "cachedInputTokens": 200,
+                    "reasoningOutputTokens": 50
                 }
             }
         });
-        let events = translate_acp_event(&notification, &mut state);
+        let events = translate_sse_event(&event, &mut state);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "thread/tokenUsage/updated");
         assert_eq!(
             events[0]["params"]["tokenUsage"]["total"]["totalTokens"],
+            6000
+        );
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["total"]["inputTokens"],
             5000
         );
         assert_eq!(
-            events[0]["params"]["tokenUsage"]["modelContextWindow"],
-            200000
+            events[0]["params"]["tokenUsage"]["total"]["outputTokens"],
+            1000
         );
     }
 
     #[test]
-    fn user_message_chunk_produces_user_message_item_in_replay_mode() {
-        let mut state = SessionTranslationState::new("ses_test123".into());
-        // Replay mode has no active synthetic turn id.
-        state.prepare_replay("ses_test123".into());
-        let notification = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "user_message_chunk",
-                    "text": "Read the file"
-                }
-            }
-        });
-
-        let events = translate_acp_event(&notification, &mut state);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["method"], "item/completed");
-        assert_eq!(events[0]["params"]["item"]["type"], "userMessage");
-        assert_eq!(
-            events[0]["params"]["item"]["content"][0]["text"],
-            "Read the file"
-        );
-    }
-
-    #[test]
-    fn plan_update_maps_to_turn_plan_updated() {
+    fn session_status_idle_produces_turn_completed() {
         let mut state = make_state();
-        let notification = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "plan",
-                    "explanation": "Plan for implementation",
-                    "plan": [
-                        { "description": "Step 1", "status": "pending" }
-                    ]
-                }
+        let event = json!({
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses_test123",
+                "status": { "type": "idle" }
             }
         });
-
-        let events = translate_acp_event(&notification, &mut state);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["method"], "turn/plan/updated");
-        assert_eq!(events[0]["params"]["threadId"], "ses_test123");
-        assert_eq!(events[0]["params"]["turnId"], "turn_1");
-        assert_eq!(
-            events[0]["params"]["explanation"],
-            "Plan for implementation"
-        );
-        assert_eq!(events[0]["params"]["plan"][0]["description"], "Step 1");
+        let events = translate_sse_event(&event, &mut state);
+        assert!(events.iter().any(|e| e["method"] == "turn/completed"));
     }
 
     #[test]
-    fn chunk_text_preserves_whitespace() {
+    fn session_status_error_produces_error_event() {
         let mut state = make_state();
-        let notification = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {
-                        "type": "text",
-                        "text": " line with trailing space "
-                    }
-                }
+        let event = json!({
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses_test123",
+                "status": { "type": "error", "message": "rate limited" }
             }
         });
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "error");
+        assert_eq!(events[0]["params"]["error"]["message"], "rate limited");
+    }
 
-        let events = translate_acp_event(&notification, &mut state);
-        assert_eq!(events[0]["params"]["delta"], " line with trailing space ");
+    #[test]
+    fn permission_updated_produces_approval_request() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "permission.updated",
+            "properties": {
+                "id": "perm_42",
+                "type": "bash",
+                "sessionID": "ses_test123",
+                "pattern": "rm -rf /tmp/test"
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "codex/requestApproval");
+        assert_eq!(events[0]["id"], "ses_test123:perm_42");
+        assert_eq!(events[0]["params"]["type"], "bash");
     }
 
     #[test]
@@ -1070,57 +917,40 @@ mod tests {
     }
 
     #[test]
-    fn permission_request_translation() {
-        let acp_req = json!({
-            "jsonrpc": "2.0",
-            "id": 42,
-            "method": "requestPermission",
-            "params": {
-                "sessionId": "ses_abc",
-                "toolCall": {
-                    "toolCallId": "tc_99",
-                    "status": "pending",
-                    "title": "bash",
-                    "rawInput": { "command": "rm -rf /tmp/test" },
-                    "kind": "bash",
-                    "locations": []
-                },
-                "options": [
-                    { "optionId": "once", "kind": "allow", "name": "Allow once" },
-                    { "optionId": "always", "kind": "allow", "name": "Always allow" },
-                    { "optionId": "reject", "kind": "deny", "name": "Deny" }
-                ]
-            }
-        });
-        let result = translate_permission_request(&acp_req, "ses_abc").unwrap();
-        assert_eq!(result["method"], "codex/requestApproval");
-        assert_eq!(result["id"], 42);
-        assert_eq!(result["params"]["type"], "bash");
-    }
-
-    #[test]
     fn permission_response_shapes() {
         let accept = build_permission_response(true);
-        assert_eq!(accept["outcome"]["optionId"], "once");
+        assert_eq!(accept["response"], "allow");
 
         let deny = build_permission_response(false);
-        assert_eq!(deny["outcome"]["optionId"], "reject");
+        assert_eq!(deny["response"], "deny");
     }
 
     #[test]
-    fn dropped_events_return_empty() {
+    fn unknown_event_type_returns_empty() {
         let mut state = make_state();
-        let notification = json!({
-            "method": "session/update",
-            "params": {
-                "sessionId": "ses_test123",
-                "update": {
-                    "sessionUpdate": "available_commands_update",
-                    "availableCommands": []
-                }
+        let event = json!({
+            "type": "some.unknown.event",
+            "properties": {}
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn chunk_text_preserves_whitespace() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "part_ws",
+                    "sessionID": "ses_test123"
+                },
+                "delta": " line with trailing space "
             }
         });
-        let events = translate_acp_event(&notification, &mut state);
-        assert!(events.is_empty());
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events[0]["params"]["delta"], " line with trailing space ");
     }
 }

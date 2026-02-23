@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::timeout;
 
-use crate::backend::app_server::{ModelSetCapability, ModelSetMethod, WorkspaceSession};
+use crate::backend::app_server::WorkspaceSession;
 use crate::backend::event_translator;
 use crate::backend::events::{AppServerEvent, EventSink};
 use crate::codex::config as codex_config;
@@ -61,23 +61,6 @@ async fn resolve_codex_home_for_workspace_core(
         .ok_or_else(|| "Unable to resolve CODEX_HOME".to_string())
 }
 
-fn response_payload(response: &Value) -> &Value {
-    response.get("result").unwrap_or(response)
-}
-
-fn extract_models_payload(response: &Value) -> Option<Value> {
-    response_payload(response).get("models").cloned()
-}
-
-fn extract_current_model_id(models_payload: &Value) -> Option<String> {
-    models_payload
-        .get("currentModelId")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 fn should_include_hidden_sessions(sort_key: &Option<String>) -> bool {
     sort_key
         .as_deref()
@@ -105,14 +88,17 @@ async fn hidden_session_ids_for_workspace(
         .unwrap_or_default()
 }
 
+// ---------------------------------------------------------------------------
+// Thread / session lifecycle (REST)
+// ---------------------------------------------------------------------------
+
 pub(crate) async fn start_thread_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
 
-    // Reuse the pre-warmed session if available (created eagerly on workspace
-    // connect to populate the models cache ahead of the first prompt).
+    // Reuse the pre-warmed session if available.
     if let Some(session_id) = session.prewarmed_session_id.lock().await.take() {
         let mut ts = session.translation_state.lock().await;
         ts.session_id = session_id.clone();
@@ -123,24 +109,16 @@ pub(crate) async fn start_thread_core(
         }));
     }
 
-    let params = json!({
-        "cwd": session.entry.path,
-        "mcpServers": []
-    });
-    let response = session.send_request("session/new", params).await?;
+    // POST /session → { id, projectID, directory }
+    let response = session.rest_post("/session", json!({})).await?;
     let session_id = response
-        .get("result")
-        .and_then(|r| r.get("sessionId"))
-        .or_else(|| response.get("sessionId"))
+        .get("id")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
     if !session_id.is_empty() {
         let mut ts = session.translation_state.lock().await;
         ts.session_id = session_id.clone();
-    }
-    if let Some(models) = extract_models_payload(&response) {
-        *session.models_cache.lock().await = Some(models);
     }
     Ok(json!({
         "result": {
@@ -149,26 +127,107 @@ pub(crate) async fn start_thread_core(
     }))
 }
 
-pub(crate) async fn resume_thread_core(
+pub(crate) async fn resume_thread_core<E: EventSink>(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
     thread_id: String,
+    event_sink: &E,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({
-        "sessionId": thread_id,
-        "cwd": session.entry.path,
-        "mcpServers": []
-    });
-    let _response = session.send_request("session/load", params).await?;
-    // session/load replays history as sessionUpdate events (handled by stdout reader).
+
+    let path = format!("/session/{thread_id}/message");
+    let messages = session.rest_get(&path).await?;
+
     {
         let mut ts = session.translation_state.lock().await;
         ts.prepare_replay(thread_id.clone());
     }
-    if let Some(models) = extract_models_payload(&_response) {
-        *session.models_cache.lock().await = Some(models);
+
+    let mut replay_item_counter = 0u64;
+
+    if let Some(msg_list) = messages.as_array() {
+        for msg_entry in msg_list {
+            let role = msg_entry
+                .get("info")
+                .and_then(|i| i.get("role"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("assistant");
+
+            let parts = msg_entry
+                .get("parts")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let mut content_parts: Vec<Value> = Vec::new();
+
+            for part in &parts {
+                let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match part_type {
+                    "text" => {
+                        let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        if !text.is_empty() {
+                            content_parts.push(json!({ "type": "text", "text": text }));
+                        }
+                    }
+                    "tool" => {
+                        let tool_name = part
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let tool_state = part
+                            .get("state")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("completed");
+                        let tool_output = part
+                            .get("output")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        content_parts.push(json!({
+                            "type": "tool",
+                            "name": tool_name,
+                            "state": tool_state,
+                            "output": tool_output
+                        }));
+                    }
+                    "file" => {
+                        if let Some(url) = part.get("url").and_then(|v| v.as_str()) {
+                            content_parts.push(json!({ "type": "image", "value": url }));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if content_parts.is_empty() {
+                continue;
+            }
+
+            replay_item_counter += 1;
+            let item_id = format!("replay_item_{replay_item_counter}");
+            let item_type = if role == "user" {
+                "userMessage"
+            } else {
+                "agentMessage"
+            };
+
+            event_sink.emit_app_server_event(AppServerEvent {
+                workspace_id: workspace_id.clone(),
+                message: json!({
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": thread_id,
+                        "item": {
+                            "id": item_id,
+                            "type": item_type,
+                            "content": content_parts
+                        }
+                    }
+                }),
+            });
+        }
     }
+
     Ok(json!({
         "result": {
             "thread": { "id": thread_id }
@@ -181,8 +240,7 @@ pub(crate) async fn fork_thread_core(
     _workspace_id: String,
     _thread_id: String,
 ) -> Result<Value, String> {
-    // ACP has unstable_forkSession but it's too unstable for MVP.
-    Err("fork is not supported in OpenCode ACP yet".to_string())
+    Err("fork is not supported yet".to_string())
 }
 
 pub(crate) async fn list_threads_core(
@@ -194,43 +252,42 @@ pub(crate) async fn list_threads_core(
     sort_key: Option<String>,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    // ACP session/list accepts cwd to scope results.  It does not support
-    // cursor/limit/sortKey — we return all results in one page.
-    let params = json!({ "cwd": session.entry.path });
-    let response = session.send_request("session/list", params).await?;
-    // ACP returns { sessions: [{ sessionId, cwd, title, updatedAt }] }.
-    // Frontend expects { result: { data: [{ id, cwd, ... }], nextCursor } }.
-    let payload = response.get("result").unwrap_or(&response);
+
+    // GET /session → Session[]
+    let response = session.rest_get("/session").await?;
     let include_hidden = should_include_hidden_sessions(&sort_key);
     let hidden_session_ids = if include_hidden {
         HashSet::new()
     } else {
         hidden_session_ids_for_workspace(workspaces, &workspace_id).await
     };
-    let sessions_arr = payload
-        .get("sessions")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+
+    let sessions_arr = response.as_array().cloned().unwrap_or_default();
     let data: Vec<Value> = sessions_arr
         .into_iter()
         .filter_map(|s| {
             let id = s
-                .get("sessionId")
+                .get("id")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if !include_hidden && hidden_session_ids.contains(id) {
                 return None;
             }
-            let cwd = s.get("cwd").and_then(|v| v.as_str()).unwrap_or_default();
-            let title = s.get("title").and_then(|v| v.as_str()).unwrap_or_default();
+            let title = s
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             let updated_at = s
                 .get("updatedAt")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
+            let directory = s
+                .get("directory")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             Some(json!({
                 "id": id,
-                "cwd": cwd,
+                "cwd": directory,
                 "name": title,
                 "preview": title,
                 "updatedAt": updated_at,
@@ -260,7 +317,7 @@ pub(crate) async fn archive_thread_core(
     _workspace_id: String,
     _thread_id: String,
 ) -> Result<Value, String> {
-    // No ACP equivalent — archive is UI-only (handled by frontend localStorage).
+    // Archive is UI-only (handled by frontend localStorage).
     Ok(json!({ "ok": true }))
 }
 
@@ -269,13 +326,13 @@ pub(crate) async fn compact_thread_core(
     workspace_id: String,
     thread_id: String,
 ) -> Result<Value, String> {
-    // Send /compact as a prompt — ACP has no dedicated compact method.
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({
-        "sessionId": thread_id,
-        "prompt": [{ "type": "text", "text": "/compact" }]
+    // Send /compact as a message via POST /session/:id/message.
+    let path = format!("/session/{thread_id}/message");
+    let body = json!({
+        "parts": [{ "type": "text", "text": "/compact" }]
     });
-    session.send_request("session/prompt", params).await
+    session.rest_post(&path, body).await
 }
 
 pub(crate) async fn set_thread_name_core(
@@ -284,15 +341,22 @@ pub(crate) async fn set_thread_name_core(
     _thread_id: String,
     _name: String,
 ) -> Result<Value, String> {
-    // No ACP equivalent — name is stored locally by the frontend.
+    // No REST equivalent — name is stored locally by the frontend.
     Ok(json!({ "ok": true }))
 }
+
+// ---------------------------------------------------------------------------
+// Image handling (kept from ACP — same logic)
+// ---------------------------------------------------------------------------
 
 const URL_IMAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const URL_IMAGE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
-/// Build ACP `session/prompt` parts from frontend input.
-async fn build_acp_prompt_parts(
+/// Build REST prompt parts from frontend input.
+///
+/// REST uses `{ type: "file", mime, url: "data:...", filename }` for images
+/// instead of ACP's `{ type: "image", mimeType, data }`.
+async fn build_rest_prompt_parts(
     text: String,
     images: Option<Vec<String>>,
     app_mentions: Option<Vec<Value>>,
@@ -309,32 +373,37 @@ async fn build_acp_prompt_parts(
                 continue;
             }
             if trimmed.starts_with("data:") {
-                // data: URI — extract mime + base64
-                // Format: data:<mime>;base64,<data>
-                if let Some(rest) = trimmed.strip_prefix("data:") {
-                    if let Some((mime, data)) = rest.split_once(";base64,") {
-                        parts.push(json!({
-                            "type": "image",
-                            "mimeType": mime,
-                            "data": data
-                        }));
-                        continue;
-                    }
-                }
-                parts.push(json!({ "type": "text", "text": format!("[image: {trimmed}]") }));
+                // data: URI — use directly as file part.
+                let mime = trimmed
+                    .strip_prefix("data:")
+                    .and_then(|rest| rest.split_once(";base64,"))
+                    .map(|(m, _)| m)
+                    .unwrap_or("application/octet-stream");
+                parts.push(json!({
+                    "type": "file",
+                    "mime": mime,
+                    "url": trimmed,
+                    "filename": "image"
+                }));
             } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-                parts.push(fetch_url_image_part(trimmed).await?);
+                parts.push(fetch_url_image_as_file_part(trimmed).await?);
             } else {
                 // Local file path — read and base64-encode.
                 match std::fs::read(trimmed) {
                     Ok(bytes) => {
                         use base64::Engine;
-                        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let encoded =
+                            base64::engine::general_purpose::STANDARD.encode(&bytes);
                         let mime = mime_from_extension(trimmed);
+                        let filename = std::path::Path::new(trimmed)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("image");
                         parts.push(json!({
-                            "type": "image",
-                            "mimeType": mime,
-                            "data": encoded
+                            "type": "file",
+                            "mime": mime,
+                            "url": format!("data:{mime};base64,{encoded}"),
+                            "filename": filename
                         }));
                     }
                     Err(_) => {
@@ -369,13 +438,22 @@ async fn build_acp_prompt_parts(
             if !seen_paths.insert(path.to_string()) {
                 continue;
             }
-            // Convert app:// mention → resource_link with file:// URI.
             let file_path = &path["app://".len()..];
-            parts.push(json!({
-                "type": "resource_link",
-                "uri": format!("file://{file_path}"),
-                "name": name
-            }));
+            // Read file content and include as text context.
+            match std::fs::read_to_string(file_path) {
+                Ok(content) => {
+                    parts.push(json!({
+                        "type": "text",
+                        "text": format!("--- {name} ({file_path}) ---\n{content}")
+                    }));
+                }
+                Err(_) => {
+                    parts.push(json!({
+                        "type": "text",
+                        "text": format!("[file: {name} at {file_path}]")
+                    }));
+                }
+            }
         }
     }
     if parts.is_empty() {
@@ -483,7 +561,8 @@ async fn validate_public_image_url(url: &reqwest::Url) -> Result<(), String> {
     Ok(())
 }
 
-async fn fetch_url_image_part(url: &str) -> Result<Value, String> {
+/// Fetch an image URL and return it as a REST file part.
+async fn fetch_url_image_as_file_part(url: &str) -> Result<Value, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid image URL.".to_string())?;
     validate_public_image_url(&parsed).await?;
 
@@ -493,7 +572,7 @@ async fn fetch_url_image_part(url: &str) -> Result<Value, String> {
         .build()
         .map_err(|err| format!("Failed to initialize image downloader: {err}"))?;
 
-    let response = client.get(parsed).send().await.map_err(|err| {
+    let response = client.get(parsed.clone()).send().await.map_err(|err| {
         if err.is_timeout() {
             "Timed out while fetching image URL.".to_string()
         } else {
@@ -540,10 +619,16 @@ async fn fetch_url_image_part(url: &str) -> Result<Value, String> {
 
     use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let filename = parsed
+        .path_segments()
+        .and_then(|segs| segs.last())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("image");
     Ok(json!({
-        "type": "image",
-        "mimeType": mime_type,
-        "data": encoded
+        "type": "file",
+        "mime": mime_type,
+        "url": format!("data:{mime_type};base64,{encoded}"),
+        "filename": filename
     }))
 }
 
@@ -551,320 +636,6 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
-}
-
-fn extract_response_error_message(response: &Value) -> Option<String> {
-    let error = response.get("error")?;
-    if let Some(message) = error.get("message").and_then(|value| value.as_str()) {
-        let trimmed = message.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    if let Some(message) = error.as_str() {
-        let trimmed = message.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    Some("request failed".to_string())
-}
-
-fn response_is_method_not_found(response: &Value) -> bool {
-    let Some(error) = response.get("error") else {
-        return false;
-    };
-    if error.get("code").and_then(|value| value.as_i64()) == Some(-32601) {
-        return true;
-    }
-    let message = error
-        .get("message")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    message.contains("method not found") || message.contains("unknown method")
-}
-
-fn model_set_method_name(method: ModelSetMethod) -> &'static str {
-    match method {
-        ModelSetMethod::UnstableSetSessionModelId | ModelSetMethod::UnstableSetSessionModel => {
-            "unstable_setSessionModel"
-        }
-        ModelSetMethod::SessionSetModelId => "session/setModel",
-    }
-}
-
-fn model_set_model_key(method: ModelSetMethod) -> &'static str {
-    match method {
-        ModelSetMethod::UnstableSetSessionModel => "model",
-        ModelSetMethod::UnstableSetSessionModelId | ModelSetMethod::SessionSetModelId => "modelId",
-    }
-}
-
-fn effort_param_key_for_model(
-    models_payload: &Value,
-    requested_model: &str,
-) -> Option<&'static str> {
-    let available = models_payload
-        .get("availableModels")
-        .and_then(|value| value.as_array())?;
-    let model_entry = available.iter().find(|entry| {
-        entry
-            .get("modelId")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .unwrap_or_default()
-            == requested_model
-    })?;
-
-    if model_entry.get("supportedReasoningEfforts").is_some()
-        || model_entry.get("defaultReasoningEffort").is_some()
-        || model_entry.get("effort").is_some()
-    {
-        return Some("effort");
-    }
-    if model_entry.get("variant").is_some() {
-        return Some("variant");
-    }
-    None
-}
-
-fn build_model_set_params(
-    method: ModelSetMethod,
-    thread_id: &str,
-    requested_model: &str,
-    effort_key: Option<&str>,
-    effort: Option<&str>,
-) -> Value {
-    let mut params = serde_json::Map::new();
-    params.insert(
-        "sessionId".to_string(),
-        Value::String(thread_id.to_string()),
-    );
-    params.insert(
-        model_set_model_key(method).to_string(),
-        Value::String(requested_model.to_string()),
-    );
-    if let (Some(key), Some(value)) = (effort_key, effort) {
-        params.insert(key.to_string(), Value::String(value.to_string()));
-    }
-    Value::Object(params)
-}
-
-async fn update_current_model_cache(
-    session: &WorkspaceSession,
-    model_set_response: &Value,
-    requested_model: &str,
-) {
-    if let Some(models_payload) = extract_models_payload(model_set_response) {
-        *session.models_cache.lock().await = Some(models_payload);
-        return;
-    }
-    let mut models_cache = session.models_cache.lock().await;
-    if let Some(models) = models_cache
-        .as_mut()
-        .and_then(|value| value.as_object_mut())
-    {
-        models.insert(
-            "currentModelId".to_string(),
-            Value::String(requested_model.to_string()),
-        );
-    }
-}
-
-async fn emit_model_set_warning_once<E: EventSink>(
-    session: &WorkspaceSession,
-    event_sink: &E,
-    workspace_id: &str,
-    message: &str,
-) {
-    let mut emitted = session.model_set_warning_emitted.lock().await;
-    if *emitted {
-        return;
-    }
-    *emitted = true;
-    event_sink.emit_app_server_event(AppServerEvent {
-        workspace_id: workspace_id.to_string(),
-        message: json!({
-            "method": "codex/stderr",
-            "params": {
-                "message": message
-            }
-        }),
-    });
-}
-
-async fn try_model_set_with_method(
-    session: &WorkspaceSession,
-    method: ModelSetMethod,
-    thread_id: &str,
-    requested_model: &str,
-    effort_key: Option<&str>,
-    effort: Option<&str>,
-) -> Result<Value, String> {
-    let mut attempts: Vec<(Option<&str>, Option<&str>)> = Vec::new();
-    if let (Some(key), Some(value)) = (effort_key, effort) {
-        attempts.push((Some(key), Some(value)));
-        attempts.push((None, None));
-    } else {
-        attempts.push((None, None));
-    }
-
-    let mut last_error = "model switch request failed".to_string();
-    let mut saw_method_not_found = true;
-    for (attempt_effort_key, attempt_effort_value) in attempts {
-        let params = build_model_set_params(
-            method,
-            thread_id,
-            requested_model,
-            attempt_effort_key,
-            attempt_effort_value,
-        );
-        let response = session
-            .send_request(model_set_method_name(method), params)
-            .await
-            .map_err(|err| {
-                saw_method_not_found = false;
-                err
-            })?;
-
-        if let Some(error_message) = extract_response_error_message(&response) {
-            if response_is_method_not_found(&response) {
-                last_error = error_message;
-                continue;
-            }
-            saw_method_not_found = false;
-            last_error = error_message;
-            continue;
-        }
-
-        return Ok(response);
-    }
-
-    if saw_method_not_found {
-        Err("method-not-found".to_string())
-    } else {
-        Err(last_error)
-    }
-}
-
-async fn maybe_apply_requested_model<E: EventSink>(
-    session: &WorkspaceSession,
-    workspace_id: &str,
-    thread_id: &str,
-    model: Option<String>,
-    effort: Option<String>,
-    event_sink: &E,
-) {
-    let requested_model = match normalize_optional_string(model) {
-        Some(value) => value,
-        None => return,
-    };
-
-    let models_snapshot = session.models_cache.lock().await.clone();
-    let current_model = models_snapshot
-        .as_ref()
-        .and_then(extract_current_model_id)
-        .unwrap_or_default();
-    if !current_model.is_empty() && current_model == requested_model {
-        return;
-    }
-
-    let effort = normalize_optional_string(effort);
-    let effort_key = models_snapshot
-        .as_ref()
-        .and_then(|models| effort_param_key_for_model(models, &requested_model));
-    let effort_ref = effort.as_deref();
-
-    let capability = *session.model_set_capability.lock().await;
-    match capability {
-        ModelSetCapability::Unsupported => {
-            emit_model_set_warning_once(
-                session,
-                event_sink,
-                workspace_id,
-                "Model switch is not supported by this ACP version; continuing with prompt.",
-            )
-            .await;
-            return;
-        }
-        ModelSetCapability::Supported(method) => {
-            match try_model_set_with_method(
-                session,
-                method,
-                thread_id,
-                &requested_model,
-                effort_key,
-                effort_ref,
-            )
-            .await
-            {
-                Ok(response) => {
-                    update_current_model_cache(session, &response, &requested_model).await;
-                }
-                Err(error) => {
-                    if error == "method-not-found" {
-                        *session.model_set_capability.lock().await =
-                            ModelSetCapability::Unsupported;
-                    }
-                    emit_model_set_warning_once(
-                        session,
-                        event_sink,
-                        workspace_id,
-                        &format!(
-                            "Failed to apply requested model; continuing with prompt: {error}"
-                        ),
-                    )
-                    .await;
-                }
-            }
-            return;
-        }
-        ModelSetCapability::Unknown => {}
-    }
-
-    for method in [
-        ModelSetMethod::UnstableSetSessionModelId,
-        ModelSetMethod::UnstableSetSessionModel,
-        ModelSetMethod::SessionSetModelId,
-    ] {
-        match try_model_set_with_method(
-            session,
-            method,
-            thread_id,
-            &requested_model,
-            effort_key,
-            effort_ref,
-        )
-        .await
-        {
-            Ok(response) => {
-                *session.model_set_capability.lock().await = ModelSetCapability::Supported(method);
-                update_current_model_cache(session, &response, &requested_model).await;
-                return;
-            }
-            Err(error) if error == "method-not-found" => continue,
-            Err(error) => {
-                emit_model_set_warning_once(
-                    session,
-                    event_sink,
-                    workspace_id,
-                    &format!("Failed to apply requested model; continuing with prompt: {error}"),
-                )
-                .await;
-                return;
-            }
-        }
-    }
-
-    *session.model_set_capability.lock().await = ModelSetCapability::Unsupported;
-    emit_model_set_warning_once(
-        session,
-        event_sink,
-        workspace_id,
-        "Model switch is not supported by this ACP version; continuing with prompt.",
-    )
-    .await;
 }
 
 fn emit_turn_error<E: EventSink>(
@@ -892,6 +663,10 @@ fn emit_turn_error<E: EventSink>(
 
 static TURN_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+// ---------------------------------------------------------------------------
+// Send user message (REST: fire-and-forget via prompt_async)
+// ---------------------------------------------------------------------------
+
 pub(crate) async fn send_user_message_core<E: EventSink>(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
@@ -908,7 +683,7 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
     let session = get_session_clone(sessions, &workspace_id).await?;
     let user_text = text.trim().to_string();
     let user_images = images.clone().unwrap_or_default();
-    let parts = build_acp_prompt_parts(text, images, app_mentions).await?;
+    let parts = build_rest_prompt_parts(text, images, app_mentions).await?;
     let _prompt_guard = session.prompt_lock.lock().await;
 
     // Synthesize turn ID and prepare translation state.
@@ -926,6 +701,7 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
         message: started_msg,
     });
 
+    // Emit synthetic user message item.
     if !user_text.is_empty() || !user_images.is_empty() {
         let mut content_parts: Vec<Value> = Vec::new();
         if !user_text.is_empty() {
@@ -956,61 +732,52 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
         }
     }
 
-    maybe_apply_requested_model(
-        &session,
-        &workspace_id,
-        &thread_id,
-        model,
-        effort,
-        event_sink,
-    )
-    .await;
-
-    let params = json!({ "sessionId": thread_id, "prompt": parts });
-    let result = session.send_request("session/prompt", params).await;
-
-    let response = match result {
-        Ok(response) => response,
-        Err(error) => {
-            emit_turn_error(event_sink, &workspace_id, &thread_id, &turn_id, &error);
-            return Err(error);
-        }
-    };
-
-    if let Some(error_message) = extract_response_error_message(&response) {
-        emit_turn_error(
-            event_sink,
-            &workspace_id,
-            &thread_id,
-            &turn_id,
-            &error_message,
-        );
-        return Ok(response);
-    }
-
-    {
-        let ts = session.translation_state.lock().await;
-        if let Some(msg_completed) = event_translator::build_agent_message_completed(&ts) {
-            event_sink.emit_app_server_event(AppServerEvent {
-                workspace_id: workspace_id.clone(),
-                message: msg_completed,
-            });
-        }
-    }
-
-    // Emit synthetic turn/completed.
-    let completed_msg = event_translator::build_turn_completed(&thread_id, &turn_id);
-    event_sink.emit_app_server_event(AppServerEvent {
-        workspace_id: workspace_id.clone(),
-        message: completed_msg,
+    // Build prompt body. Model selection is per-message in REST.
+    let mut body = json!({
+        "parts": parts
     });
+    let requested_model = normalize_optional_string(model);
+    let requested_effort = normalize_optional_string(effort);
+    if let Some(ref model_id) = requested_model {
+        // REST API accepts model as { providerID, modelID } but modelID alone
+        // may work depending on the server version. Include both fields.
+        body["model"] = json!({ "modelID": model_id });
+    }
+    if let Some(ref effort_level) = requested_effort {
+        body["effort"] = json!(effort_level);
+    }
 
-    let mut command_result = response_payload(&response)
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
-    command_result.insert("turn".to_string(), json!({ "id": turn_id }));
-    Ok(json!({ "result": Value::Object(command_result) }))
+    // Fire-and-forget: POST /session/:id/prompt_async → 204.
+    // Turn completion comes from SSE `session.status` → idle.
+    let path = format!("/session/{thread_id}/prompt_async");
+    let result = session.rest_post(&path, body).await;
+
+    if let Err(ref error) = result {
+        emit_turn_error(event_sink, &workspace_id, &thread_id, &turn_id, error);
+    }
+
+    // Return immediately — SSE events will drive the rest of the turn.
+    Ok(json!({
+        "result": {
+            "turn": { "id": turn_id }
+        }
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Turn interrupt (REST: POST /session/:id/abort)
+// ---------------------------------------------------------------------------
+
+pub(crate) async fn turn_interrupt_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    _turn_id: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let path = format!("/session/{thread_id}/abort");
+    session.rest_post(&path, json!({})).await?;
+    Ok(json!({ "ok": true }))
 }
 
 pub(crate) async fn turn_steer_core(
@@ -1022,7 +789,7 @@ pub(crate) async fn turn_steer_core(
     _images: Option<Vec<String>>,
     _app_mentions: Option<Vec<Value>>,
 ) -> Result<Value, String> {
-    Err("turn steering is not supported by OpenCode ACP".to_string())
+    Err("turn steering is not supported yet".to_string())
 }
 
 pub(crate) async fn collaboration_mode_list_core(
@@ -1032,20 +799,6 @@ pub(crate) async fn collaboration_mode_list_core(
     Ok(json!({ "result": { "data": [] } }))
 }
 
-pub(crate) async fn turn_interrupt_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    thread_id: String,
-    _turn_id: String,
-) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    // ACP uses a `cancel` notification with sessionId.
-    session
-        .send_notification("cancel", Some(json!({ "sessionId": thread_id })))
-        .await?;
-    Ok(json!({ "ok": true }))
-}
-
 pub(crate) async fn start_review_core(
     _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     _workspace_id: String,
@@ -1053,149 +806,122 @@ pub(crate) async fn start_review_core(
     _target: Value,
     _delivery: Option<String>,
 ) -> Result<Value, String> {
-    Err("review is not supported by OpenCode ACP".to_string())
+    Err("review is not supported yet".to_string())
 }
 
-const THINKING_LEVELS: &[&str] = &["low", "medium", "high", "max"];
-
-/// Returns `Some((base_name, level))` when `name` ends with ` (<known_level>)`.
-fn strip_thinking_suffix(name: &str) -> Option<(&str, &str)> {
-    let name = name.trim();
-    let rest = name.strip_suffix(')')?;
-    let paren_start = rest.rfind(" (")?;
-    let level = &rest[paren_start + 2..];
-    if THINKING_LEVELS
-        .iter()
-        .any(|tl| tl.eq_ignore_ascii_case(level))
-    {
-        Some((name[..paren_start].trim(), level))
-    } else {
-        None
-    }
-}
-
-fn thinking_level_order(level: &str) -> usize {
-    match level.to_ascii_lowercase().as_str() {
-        "low" => 0,
-        "medium" => 1,
-        "high" => 2,
-        "max" => 3,
-        _ => 99,
-    }
-}
+// ---------------------------------------------------------------------------
+// Model list (REST: GET /config/providers)
+// ---------------------------------------------------------------------------
 
 pub(crate) async fn model_list_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let models_payload = session.models_cache.lock().await.clone();
-    let Some(models_payload) = models_payload else {
-        return Ok(json!({ "result": { "data": [] } }));
+
+    // Try to refresh from server; fall back to cache.
+    let providers = match session.rest_get("/config/providers").await {
+        Ok(fresh) => {
+            *session.models_cache.lock().await = Some(fresh.clone());
+            fresh
+        }
+        Err(_) => {
+            let cache = session.models_cache.lock().await.clone();
+            cache.unwrap_or(json!({}))
+        }
     };
 
-    let current_model = models_payload
-        .get("currentModelId")
-        .and_then(|value| value.as_str())
+    // REST returns { providers: [{ id, models: [{ id, name }] }], default: { ... } }.
+    let default_config = providers.get("default").cloned().unwrap_or(json!({}));
+    let default_model = default_config
+        .as_object()
+        .and_then(|m| m.values().next())
+        .and_then(|v| v.as_str())
         .unwrap_or_default();
-    let available_models = models_payload
-        .get("availableModels")
-        .and_then(|value| value.as_array())
+
+    let provider_list = providers
+        .get("providers")
+        .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
 
-    // Pass 1 — collect thinking-variant effort levels keyed by base display
-    // name, and record which modelIds are variants so they can be skipped.
-    let mut variant_levels: HashMap<String, Vec<String>> = HashMap::new();
-    let mut variant_model_ids: HashSet<String> = HashSet::new();
-
-    for entry in &available_models {
-        let display_name = entry
-            .get("name")
+    let mut data: Vec<Value> = Vec::new();
+    for provider in &provider_list {
+        let provider_id = provider
+            .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        if let Some((base_name, level)) = strip_thinking_suffix(display_name) {
-            variant_levels
-                .entry(base_name.to_string())
-                .or_default()
-                .push(level.to_string());
-            if let Some(mid) = entry.get("modelId").and_then(|v| v.as_str()) {
-                variant_model_ids.insert(mid.trim().to_string());
-            }
-        }
-    }
-    for levels in variant_levels.values_mut() {
-        levels.sort_by_key(|l| thinking_level_order(l));
-    }
-
-    // Pass 2 — emit base models only, with effort levels attached.
-    let data: Vec<Value> = available_models
-        .into_iter()
-        .filter_map(|entry| {
-            let model_id = entry
-                .get("modelId")
-                .and_then(|value| value.as_str())
+        let models = provider
+            .get("models")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for model in models {
+            let model_id = model
+                .get("id")
+                .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            if model_id.is_empty() || variant_model_ids.contains(&model_id) {
-                return None;
+            if model_id.is_empty() {
+                continue;
             }
-            let display_name = entry
+            let display_name = model
                 .get("name")
-                .and_then(|value| value.as_str())
+                .and_then(|v| v.as_str())
                 .unwrap_or(&model_id)
                 .trim()
                 .to_string();
-
-            // Prefer explicit ACP field; fall back to levels scraped from
-            // variant entries whose base name matches this model.
-            let acp_efforts = entry
-                .get("supportedReasoningEfforts")
-                .and_then(|v| v.as_array())
-                .filter(|a| !a.is_empty());
-
-            let efforts: Vec<Value> = if let Some(acp) = acp_efforts {
-                acp.iter()
-                    .map(|e| {
-                        if e.is_object() {
-                            e.clone()
-                        } else {
-                            let label = e.as_str().unwrap_or_default();
-                            json!({ "reasoningEffort": label, "description": "" })
-                        }
-                    })
-                    .collect()
-            } else {
-                variant_levels
-                    .get(&display_name)
-                    .into_iter()
-                    .flatten()
-                    .map(|level| json!({ "reasoningEffort": level, "description": "" }))
-                    .collect()
-            };
-
-            let default_effort = entry
-                .get("defaultReasoningEffort")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| Value::String(s.trim().to_string()))
-                .unwrap_or(Value::Null);
-
-            Some(json!({
-                "id": model_id.clone(),
-                "model": model_id.clone(),
+            let qualified_id = format!("{provider_id}/{model_id}");
+            let is_default = qualified_id == default_model || model_id == default_model;
+            data.push(json!({
+                "id": qualified_id,
+                "model": model_id,
                 "displayName": display_name,
                 "description": "",
-                "supportedReasoningEfforts": efforts,
-                "defaultReasoningEffort": default_effort,
-                "isDefault": model_id == current_model,
-            }))
-        })
-        .collect();
+                "supportedReasoningEfforts": [],
+                "defaultReasoningEffort": null,
+                "isDefault": is_default,
+            }));
+        }
+    }
 
     Ok(json!({ "result": { "data": data } }))
 }
+
+// ---------------------------------------------------------------------------
+// Permission response (REST: POST /session/:sid/permissions/:pid)
+// ---------------------------------------------------------------------------
+
+pub(crate) async fn respond_to_server_request_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    request_id: Value,
+    result: Value,
+) -> Result<(), String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+
+    // request_id is "sessionId:permissionId" composite string.
+    let composite = request_id.as_str().unwrap_or_default();
+    let (_session_id, permission_id) = composite
+        .split_once(':')
+        .unwrap_or((composite, ""));
+
+    let accept = result
+        .get("decision")
+        .and_then(|v| v.as_str())
+        .map(|d| d == "accept")
+        .unwrap_or(true);
+
+    let body = event_translator::build_permission_response(accept);
+    let path = format!("/permission/{permission_id}/reply");
+    session.rest_post_bool(&path, body).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Account / login stubs (unchanged)
+// ---------------------------------------------------------------------------
 
 pub(crate) async fn account_rate_limits_core(
     _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
@@ -1209,14 +935,9 @@ pub(crate) async fn account_read_core(
     workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
     workspace_id: String,
 ) -> Result<Value, String> {
-    let session = {
+    let _session = {
         let sessions = sessions.lock().await;
         sessions.get(&workspace_id).cloned()
-    };
-    let response = if let Some(session) = session {
-        session.send_request("account/read", Value::Null).await.ok()
-    } else {
-        None
     };
 
     let (entry, parent_entry) = resolve_workspace_and_parent(workspaces, &workspace_id).await?;
@@ -1224,7 +945,7 @@ pub(crate) async fn account_read_core(
         .or_else(resolve_default_codex_home);
     let fallback = read_auth_account(codex_home);
 
-    Ok(build_account_response(response, fallback))
+    Ok(build_account_response(None, fallback))
 }
 
 pub(crate) async fn codex_login_core(
@@ -1232,7 +953,6 @@ pub(crate) async fn codex_login_core(
     _codex_login_cancels: &Mutex<HashMap<String, CodexLoginCancelState>>,
     _workspace_id: String,
 ) -> Result<Value, String> {
-    // OpenCode uses `opencode auth login` externally — no in-app login flow.
     Err("Login is not supported in-app. Run `opencode auth login` in Terminal.".to_string())
 }
 
@@ -1259,24 +979,6 @@ pub(crate) async fn apps_list_core(
     _thread_id: Option<String>,
 ) -> Result<Value, String> {
     Ok(json!({ "result": { "data": [], "nextCursor": null } }))
-}
-
-pub(crate) async fn respond_to_server_request_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-    request_id: Value,
-    result: Value,
-) -> Result<(), String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-    // Frontend sends { decision: "accept" | "decline" } or { answers: {...} }.
-    // For approval decisions, translate to ACP's permission response format.
-    let acp_result = if let Some(decision) = result.get("decision").and_then(|v| v.as_str()) {
-        let accept = decision == "accept";
-        event_translator::build_permission_response(accept)
-    } else {
-        result
-    };
-    session.send_response(request_id, acp_result).await
 }
 
 pub(crate) async fn remember_approval_rule_core(
@@ -1312,38 +1014,15 @@ pub(crate) async fn get_config_model_core(
     Ok(json!({ "model": model }))
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{WorkspaceKind, WorkspaceSettings};
     use tokio::runtime::Builder;
-
-    #[test]
-    fn response_is_method_not_found_checks_code_and_message() {
-        let by_code = json!({
-            "error": {
-                "code": -32601,
-                "message": "method not found"
-            }
-        });
-        assert!(response_is_method_not_found(&by_code));
-
-        let by_message = json!({
-            "error": {
-                "code": 42,
-                "message": "Unknown method: unstable_setSessionModel"
-            }
-        });
-        assert!(response_is_method_not_found(&by_message));
-
-        let other = json!({
-            "error": {
-                "code": -32000,
-                "message": "invalid params"
-            }
-        });
-        assert!(!response_is_method_not_found(&other));
-    }
 
     #[test]
     fn include_hidden_sessions_enabled_only_for_all_sort_key() {
@@ -1369,13 +1048,13 @@ mod tests {
     }
 
     #[test]
-    fn build_acp_prompt_parts_blocks_localhost_image_urls() {
+    fn build_rest_prompt_parts_blocks_localhost_image_urls() {
         let runtime = Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
         runtime.block_on(async {
-            let result = build_acp_prompt_parts(
+            let result = build_rest_prompt_parts(
                 "hello".to_string(),
                 Some(vec!["http://localhost/image.png".to_string()]),
                 None,

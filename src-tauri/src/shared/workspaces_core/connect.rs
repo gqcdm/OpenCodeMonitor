@@ -8,7 +8,6 @@ use tokio::sync::Mutex;
 use crate::backend::app_server::WorkspaceSession;
 use crate::codex::args::resolve_workspace_codex_args;
 use crate::codex::home::resolve_workspace_codex_home;
-use crate::shared::process_core::kill_child_process_tree;
 use crate::types::{AppSettings, WorkspaceEntry};
 
 use super::helpers::resolve_entry_and_parent;
@@ -43,7 +42,6 @@ pub(super) async fn kill_session_by_id(
     id: &str,
 ) {
     if let Some(session) = sessions.lock().await.remove(id) {
-        let mut child = session.child.lock().await;
-        kill_child_process_tree(&mut child).await;
+        session.shutdown();
     }
 }
