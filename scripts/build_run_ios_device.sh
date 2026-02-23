@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 DEVICE=""
 TARGET="${TARGET:-aarch64}"
-BUNDLE_ID="${BUNDLE_ID:-com.dimillian.codexmonitor.ios}"
+BUNDLE_ID="${BUNDLE_ID:-com.jmcdev.opencodemonitor.ios}"
 DEVELOPMENT_TEAM="${APPLE_DEVELOPMENT_TEAM:-}"
 SKIP_BUILD=0
 OPEN_XCODE=0
@@ -24,7 +24,7 @@ Options:
   --device <id|name>   Required unless --list-devices is used.
                        Accepts UDID, serial, UUID, or device name.
   --target <target>    Tauri iOS target (default: aarch64)
-  --bundle-id <id>     Bundle id to launch (default: com.dimillian.codexmonitor.ios)
+  --bundle-id <id>     Bundle id to launch (default: com.jmcdev.opencodemonitor.ios)
   --team <id>          Apple development team ID (sets APPLE_DEVELOPMENT_TEAM)
   --skip-build         Skip build and only install + launch existing app
   --open-xcode         Open Xcode after build instead of install/launch via devicectl
@@ -114,10 +114,10 @@ has_configured_ios_team() {
     const fs = require("fs");
     const baseCfg = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
     let iosCfg = {};
-    try {
-      iosCfg = JSON.parse(fs.readFileSync("src-tauri/tauri.ios.conf.json", "utf8"));
-    } catch (_) {}
-    const team = iosCfg?.bundle?.iOS?.developmentTeam ?? baseCfg?.bundle?.iOS?.developmentTeam;
+    try { iosCfg = JSON.parse(fs.readFileSync("src-tauri/tauri.ios.conf.json", "utf8")); } catch (_) {}
+    let localCfg = {};
+    try { localCfg = JSON.parse(fs.readFileSync("src-tauri/tauri.ios.local.conf.json", "utf8")); } catch (_) {}
+    const team = localCfg?.bundle?.iOS?.developmentTeam ?? iosCfg?.bundle?.iOS?.developmentTeam ?? baseCfg?.bundle?.iOS?.developmentTeam;
     process.exit(team && String(team).trim() ? 0 : 1);
   ' >/dev/null 2>&1
 }
@@ -151,24 +151,30 @@ fi
 if [[ "$SKIP_BUILD" -eq 0 && -z "${APPLE_DEVELOPMENT_TEAM:-}" ]]; then
   if ! has_configured_ios_team; then
     echo "Missing iOS signing team." >&2
-    echo "Set one via --team <TEAM_ID> or APPLE_DEVELOPMENT_TEAM, or set bundle.iOS.developmentTeam in src-tauri/tauri.ios.conf.json (or src-tauri/tauri.conf.json)." >&2
+    echo "Set one via --team <TEAM_ID> or APPLE_DEVELOPMENT_TEAM, or set bundle.iOS.developmentTeam in src-tauri/tauri.ios.local.conf.json (or src-tauri/tauri.ios.conf.json)." >&2
     echo "Tip: First-time setup can be done with --open-xcode." >&2
     exit 1
   fi
 fi
 
+LOCAL_IOS_CONF="src-tauri/tauri.ios.local.conf.json"
+EXTRA_ARGS=()
+if [[ -f "$LOCAL_IOS_CONF" ]]; then
+  EXTRA_ARGS+=(--config "$LOCAL_IOS_CONF")
+fi
+
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   sync_ios_icons
   if [[ "$OPEN_XCODE" -eq 1 ]]; then
-    "$NPM_BIN" run tauri -- ios build -d -t "$TARGET" --open
+    "$NPM_BIN" run tauri -- ios build -d -t "$TARGET" "${EXTRA_ARGS[@]}" --open
     exit 0
   fi
-  "$NPM_BIN" run tauri -- ios build -d -t "$TARGET" --ci
+  "$NPM_BIN" run tauri -- ios build -d -t "$TARGET" "${EXTRA_ARGS[@]}" --ci
 fi
 
-APP_PATH="src-tauri/gen/apple/build/arm64/Codex Monitor.app"
+APP_PATH="src-tauri/gen/apple/build/arm64/OpenCode Monitor.app"
 if [[ ! -d "$APP_PATH" ]]; then
-  APP_PATH="$(find src-tauri/gen/apple/build -maxdepth 4 -type d -name 'Codex Monitor.app' | head -n 1 || true)"
+  APP_PATH="$(find src-tauri/gen/apple/build -maxdepth 4 -type d -name 'OpenCode Monitor.app' | head -n 1 || true)"
 fi
 
 if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then

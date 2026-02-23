@@ -1,9 +1,4 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "identifier": "com.dimillian.codexmonitor.ios",
-  "bundle": {
-    "iOS": {
-      "developmentTeam": "Z6P74P6T99"
-    }
-  }
+  "identifier": "com.jmcdev.opencodemonitor.ios"
 }

@@ -1,6 +1,6 @@
-name: codex-monitor
+name: opencode-monitor
 options:
-  bundleIdPrefix: com.dimillian.codexmonitor
+  bundleIdPrefix: com.jmcdev.opencodemonitor.ios
   deploymentTarget:
     iOS: 14.0
 fileGroups: [../../src]
@@ -10,8 +10,9 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: Codex Monitor
-      PRODUCT_BUNDLE_IDENTIFIER: com.dimillian.codexmonitor
+      PRODUCT_NAME: OpenCode Monitor
+      PRODUCT_BUNDLE_IDENTIFIER: com.jmcdev.opencodemonitor.ios
+      DEVELOPMENT_TEAM: 39X5D9F4XY
 targetTemplates:
   app:
     type: application
@@ -24,20 +25,20 @@ targetTemplates:
     settings:
       groups: [app]
 targets:
-  codex-monitor_iOS:
+  opencode-monitor_iOS:
     type: application
     platform: iOS
     sources:
       - path: Sources
       - path: Assets.xcassets
       - path: Externals
-      - path: codex-monitor_iOS
+      - path: opencode-monitor_iOS
       - path: assets
         buildPhase: resources
         type: folder
       - path: LaunchScreen.storyboard
     info:
-      path: codex-monitor_iOS/Info.plist
+      path: opencode-monitor_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
@@ -51,12 +52,10 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        UIBackgroundModes:
-          - fetch
-        CFBundleShortVersionString: 0.7.45
-        CFBundleVersion: "0.7.45"
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: "0.1.0"
     entitlements:
-      path: codex-monitor_iOS/codex-monitor_iOS.entitlements
+      path: opencode-monitor_iOS/opencode-monitor_iOS.entitlements
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
@@ -66,9 +65,8 @@ targets:
         ENABLE_BITCODE: false
         ARCHS: [arm64]
         VALID_ARCHS: arm64 
-        OTHER_LDFLAGS: $(inherited) -lz -liconv
-        LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(DT_TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
-        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(DT_TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
       groups: [app]
@@ -82,12 +80,10 @@ targets:
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
+      - sdk: libz.tbd
+      - sdk: libiconv.tbd
     preBuildScripts:
-      - script: |
-          npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
-          if [ -d "${SRCROOT}/../../icons/ios" ] && [ -d "${SRCROOT}/Assets.xcassets/AppIcon.appiconset" ]; then
-            cp -f "${SRCROOT}/../../icons/ios/"*.png "${SRCROOT}/Assets.xcassets/AppIcon.appiconset/"
-          fi
+      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:
