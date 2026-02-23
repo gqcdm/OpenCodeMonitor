@@ -45,6 +45,7 @@ chrono = { version = "0.4", features = ["clock"] }
 shell-words = "1.1"
 similar = "2.6"
 toml = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2"

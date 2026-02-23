@@ -1,6 +1,8 @@
 use chrono::{DateTime, Duration, Local, TimeZone, Utc};
+use rusqlite::{params, Connection, OpenFlags};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -26,6 +28,11 @@ struct UsageTotals {
     input: i64,
     cached: i64,
     output: i64,
+}
+
+#[derive(Default, Clone, Copy)]
+struct OpencodeDbSessionState {
+    cached_read: i64,
 }
 
 const MAX_ACTIVITY_GAP_MS: i64 = 2 * 60 * 1000;
@@ -73,31 +80,37 @@ fn scan_local_usage(
         .collect();
     let mut model_totals: HashMap<String, i64> = HashMap::new();
 
-    if sessions_roots.is_empty() {
-        return Ok(build_snapshot(updated_at, day_keys, daily, HashMap::new()));
-    }
-
-    for root in sessions_roots {
-        for day_key in &day_keys {
-            let day_dir = day_dir_for_key(root, day_key);
-            if !day_dir.exists() {
-                continue;
-            }
-            let entries = match std::fs::read_dir(&day_dir) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+    if !sessions_roots.is_empty() {
+        for root in sessions_roots {
+            for day_key in &day_keys {
+                let day_dir = day_dir_for_key(root, day_key);
+                if !day_dir.exists() {
                     continue;
                 }
-                scan_file(&path, &mut daily, &mut model_totals, workspace_path)?;
+                let entries = match std::fs::read_dir(&day_dir) {
+                    Ok(entries) => entries,
+                    Err(_) => continue,
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+                        continue;
+                    }
+                    scan_file(&path, &mut daily, &mut model_totals, workspace_path)?;
+                }
             }
         }
     }
 
-    Ok(build_snapshot(updated_at, day_keys, daily, model_totals))
+    let snapshot = build_snapshot(updated_at, day_keys.clone(), daily, model_totals);
+    if snapshot_has_usage(&snapshot) {
+        return Ok(snapshot);
+    }
+
+    scan_opencode_db_usage(days, workspace_path, updated_at)
+        .map(Some)
+        .or_else(|_| Ok(None))
+        .map(|fallback| fallback.unwrap_or(snapshot))
 }
 
 fn build_snapshot(
@@ -177,6 +190,226 @@ fn build_snapshot(
         },
         top_models,
     }
+}
+
+fn snapshot_has_usage(snapshot: &LocalUsageSnapshot) -> bool {
+    snapshot.totals.last30_days_tokens > 0
+        || snapshot.top_models.iter().any(|model| model.tokens > 0)
+        || snapshot
+            .days
+            .iter()
+            .any(|day| day.agent_runs > 0 || day.agent_time_ms > 0)
+}
+
+fn scan_opencode_db_usage(
+    days: u32,
+    workspace_path: Option<&Path>,
+    updated_at: i64,
+) -> Result<LocalUsageSnapshot, String> {
+    let Some(db_path) = resolve_opencode_sqlite_path() else {
+        return Err("OpenCode database not found".to_string());
+    };
+    if !db_path.exists() {
+        return Err("OpenCode database not found".to_string());
+    }
+
+    let day_keys = make_day_keys(days);
+    let mut daily: HashMap<String, DailyTotals> = day_keys
+        .iter()
+        .map(|key| (key.clone(), DailyTotals::default()))
+        .collect();
+    let mut model_totals: HashMap<String, i64> = HashMap::new();
+    let mut cache_state_by_session: HashMap<String, OpencodeDbSessionState> = HashMap::new();
+    let cutoff_ms = earliest_day_start_ms(days).unwrap_or(0);
+
+    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|err| format!("Failed to open OpenCode usage DB: {err}"))?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT m.session_id, s.directory, m.time_created, m.data
+            FROM message m
+            JOIN session s ON s.id = m.session_id
+            WHERE m.time_created >= ?1
+            ORDER BY m.session_id ASC, m.time_created ASC
+            "#,
+        )
+        .map_err(|err| format!("Failed to query OpenCode usage DB: {err}"))?;
+
+    let rows = stmt
+        .query_map(params![cutoff_ms], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|err| format!("Failed to read OpenCode usage rows: {err}"))?;
+
+    for row in rows {
+        let (session_id, session_directory, db_time_created, data) = match row {
+            Ok(row) => row,
+            Err(_) => continue,
+        };
+        let value = match serde_json::from_str::<Value>(&data) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let role = value.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        if role != "assistant" {
+            continue;
+        }
+
+        let effective_cwd = extract_opencode_message_cwd(&value)
+            .filter(|cwd| !cwd.trim().is_empty())
+            .unwrap_or(session_directory.clone());
+        if let Some(filter) = workspace_path {
+            if !path_matches_workspace(&effective_cwd, filter) {
+                continue;
+            }
+        }
+
+        let created_ms = value
+            .get("time")
+            .and_then(|t| t.get("created"))
+            .and_then(value_as_i64)
+            .unwrap_or(db_time_created);
+        let day_key = match day_key_for_timestamp_ms(created_ms) {
+            Some(key) if daily.contains_key(&key) => key,
+            _ => continue,
+        };
+
+        let tokens = value.get("tokens").and_then(|v| v.as_object());
+        let uncached_input = tokens
+            .map(|m| read_i64(m, &["input"]))
+            .unwrap_or(0)
+            .max(0);
+        let output = tokens
+            .map(|m| read_i64(m, &["output"]))
+            .unwrap_or(0)
+            .max(0);
+        let raw_cached_read = tokens
+            .and_then(|m| m.get("cache"))
+            .and_then(|cache| cache.as_object())
+            .map(|m| read_i64(m, &["read"]))
+            .unwrap_or(0)
+            .max(0);
+
+        let session_state = cache_state_by_session.entry(session_id).or_default();
+        let cached_delta = if raw_cached_read >= session_state.cached_read {
+            raw_cached_read - session_state.cached_read
+        } else {
+            // OpenCode can reset cache counters between prompts while keeping the same session.
+            raw_cached_read
+        };
+        session_state.cached_read = raw_cached_read;
+
+        let input_total = uncached_input + cached_delta;
+        let total_for_model = input_total + output;
+
+        if let Some(entry) = daily.get_mut(&day_key) {
+            entry.agent_runs += 1;
+            entry.input += input_total;
+            entry.cached += cached_delta.min(input_total);
+            entry.output += output;
+
+            let completed_ms = value
+                .get("time")
+                .and_then(|t| t.get("completed"))
+                .and_then(value_as_i64)
+                .unwrap_or(created_ms);
+            let duration_ms = (completed_ms - created_ms).max(0);
+            entry.agent_ms += duration_ms;
+        }
+
+        if total_for_model > 0 {
+            let model = extract_model_from_opencode_message(&value)
+                .unwrap_or_else(|| "unknown".to_string());
+            *model_totals.entry(model).or_insert(0) += total_for_model;
+        }
+    }
+
+    Ok(build_snapshot(updated_at, day_keys, daily, model_totals))
+}
+
+fn resolve_opencode_sqlite_path() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(value) = env::var("OPENCODE_DATA_DIR") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            candidates.push(PathBuf::from(trimmed).join("opencode.db"));
+        }
+    }
+
+    if let Ok(value) = env::var("XDG_DATA_HOME") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            candidates.push(PathBuf::from(trimmed).join("opencode").join("opencode.db"));
+        }
+    }
+
+    let home = resolve_user_home_dir()?;
+    candidates.push(home.join(".local").join("share").join("opencode").join("opencode.db"));
+    candidates.push(
+        home.join("Library")
+            .join("Application Support")
+            .join("opencode")
+            .join("opencode.db"),
+    );
+    candidates.push(
+        home.join("Library")
+            .join("Application Support")
+            .join("ai.opencode.desktop")
+            .join("opencode.db"),
+    );
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn resolve_user_home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+fn earliest_day_start_ms(days: u32) -> Option<i64> {
+    let first_day = Local::now().date_naive() - Duration::days(days.saturating_sub(1) as i64);
+    let local_dt = first_day.and_hms_opt(0, 0, 0)?;
+    Local
+        .from_local_datetime(&local_dt)
+        .earliest()
+        .or_else(|| Local.from_local_datetime(&local_dt).latest())
+        .map(|dt| dt.timestamp_millis())
+}
+
+fn value_as_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|v| i64::try_from(v).ok()))
+        .or_else(|| value.as_f64().map(|v| v as i64))
+}
+
+fn extract_opencode_message_cwd(value: &Value) -> Option<String> {
+    value
+        .get("path")
+        .and_then(|path| path.get("cwd"))
+        .and_then(|cwd| cwd.as_str())
+        .map(|cwd| cwd.to_string())
+}
+
+fn extract_model_from_opencode_message(value: &Value) -> Option<String> {
+    value
+        .get("modelID")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            value
+                .get("model")
+                .and_then(|model| model.get("modelID"))
+                .and_then(|v| v.as_str())
+        })
+        .map(|model| model.to_string())
 }
 
 fn scan_file(
