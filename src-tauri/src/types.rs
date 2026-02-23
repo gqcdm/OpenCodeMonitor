@@ -173,6 +173,8 @@ pub(crate) struct LocalUsageTotals {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LocalUsageModel {
     pub(crate) model: String,
+    #[serde(default)]
+    pub(crate) provider: Option<String>,
     pub(crate) tokens: i64,
     pub(crate) share_percent: f64,
 }

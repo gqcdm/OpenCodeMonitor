@@ -371,13 +371,38 @@
   border: 1px solid var(--border-subtle);
   max-width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow: hidden;
+}
+
+.home-usage-model-provider {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-subtle);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.home-usage-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .home-usage-model-share {
   font-size: 10px;
   color: var(--text-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .home-usage-model-empty {

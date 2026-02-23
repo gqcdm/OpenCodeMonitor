@@ -35,6 +35,21 @@ struct OpencodeDbSessionState {
     cached_read: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct UsageModelKey {
+    model: String,
+    provider: Option<String>,
+}
+
+impl UsageModelKey {
+    fn unknown() -> Self {
+        Self {
+            model: "unknown".to_string(),
+            provider: None,
+        }
+    }
+}
+
 const MAX_ACTIVITY_GAP_MS: i64 = 2 * 60 * 1000;
 
 pub(crate) async fn local_usage_snapshot_core(
@@ -78,7 +93,7 @@ fn scan_local_usage(
         .iter()
         .map(|key| (key.clone(), DailyTotals::default()))
         .collect();
-    let mut model_totals: HashMap<String, i64> = HashMap::new();
+    let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
 
     if !sessions_roots.is_empty() {
         for root in sessions_roots {
@@ -117,7 +132,7 @@ fn build_snapshot(
     updated_at: i64,
     day_keys: Vec<String>,
     daily: HashMap<String, DailyTotals>,
-    model_totals: HashMap<String, i64>,
+    model_totals: HashMap<UsageModelKey, i64>,
 ) -> LocalUsageSnapshot {
     let mut days: Vec<LocalUsageDay> = Vec::with_capacity(day_keys.len());
     let mut total_tokens = 0;
@@ -163,9 +178,10 @@ fn build_snapshot(
 
     let mut top_models: Vec<LocalUsageModel> = model_totals
         .into_iter()
-        .filter(|(model, tokens)| model != "unknown" && *tokens > 0)
-        .map(|(model, tokens)| LocalUsageModel {
-            model,
+        .filter(|(key, tokens)| key.model != "unknown" && *tokens > 0)
+        .map(|(key, tokens)| LocalUsageModel {
+            model: key.model,
+            provider: key.provider,
             tokens,
             share_percent: if total_tokens > 0 {
                 ((tokens as f64) / (total_tokens as f64) * 1000.0).round() / 10.0
@@ -218,7 +234,7 @@ fn scan_opencode_db_usage(
         .iter()
         .map(|key| (key.clone(), DailyTotals::default()))
         .collect();
-    let mut model_totals: HashMap<String, i64> = HashMap::new();
+    let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
     let mut cache_state_by_session: HashMap<String, OpencodeDbSessionState> = HashMap::new();
     let cutoff_ms = earliest_day_start_ms(days).unwrap_or(0);
 
@@ -325,7 +341,7 @@ fn scan_opencode_db_usage(
 
         if total_for_model > 0 {
             let model = extract_model_from_opencode_message(&value)
-                .unwrap_or_else(|| "unknown".to_string());
+                .unwrap_or_else(UsageModelKey::unknown);
             *model_totals.entry(model).or_insert(0) += total_for_model;
         }
     }
@@ -399,8 +415,8 @@ fn extract_opencode_message_cwd(value: &Value) -> Option<String> {
         .map(|cwd| cwd.to_string())
 }
 
-fn extract_model_from_opencode_message(value: &Value) -> Option<String> {
-    value
+fn extract_model_from_opencode_message(value: &Value) -> Option<UsageModelKey> {
+    let model = value
         .get("modelID")
         .and_then(|v| v.as_str())
         .or_else(|| {
@@ -409,13 +425,24 @@ fn extract_model_from_opencode_message(value: &Value) -> Option<String> {
                 .and_then(|model| model.get("modelID"))
                 .and_then(|v| v.as_str())
         })
-        .map(|model| model.to_string())
+        .and_then(normalize_non_empty_string)?;
+    let provider = value
+        .get("providerID")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            value
+                .get("model")
+                .and_then(|model| model.get("providerID"))
+                .and_then(|v| v.as_str())
+        })
+        .and_then(normalize_non_empty_string);
+    Some(UsageModelKey { model, provider })
 }
 
 fn scan_file(
     path: &Path,
     daily: &mut HashMap<String, DailyTotals>,
-    model_totals: &mut HashMap<String, i64>,
+    model_totals: &mut HashMap<UsageModelKey, i64>,
     workspace_path: Option<&Path>,
 ) -> Result<(), String> {
     let file = match File::open(path) {
@@ -426,7 +453,7 @@ fn scan_file(
     };
     let reader = BufReader::new(file);
     let mut previous_totals: Option<UsageTotals> = None;
-    let mut current_model: Option<String> = None;
+    let mut current_model: Option<UsageModelKey> = None;
     let mut last_activity_ms: Option<i64> = None;
     let mut seen_runs: HashSet<i64> = HashSet::new();
     let mut match_known = workspace_path.is_none();
@@ -602,7 +629,7 @@ fn scan_file(
                     let model = current_model
                         .clone()
                         .or_else(|| extract_model_from_token_count(&value))
-                        .unwrap_or_else(|| "unknown".to_string());
+                        .unwrap_or_else(UsageModelKey::unknown);
                     *model_totals.entry(model).or_insert(0) += delta.input + delta.output;
                 }
             }
@@ -645,18 +672,38 @@ fn scan_file(
     Ok(())
 }
 
-fn extract_model_from_turn_context(value: &Value) -> Option<String> {
+fn extract_model_from_turn_context(value: &Value) -> Option<UsageModelKey> {
     let payload = value.get("payload").and_then(|value| value.as_object())?;
-    if let Some(model) = payload.get("model").and_then(|value| value.as_str()) {
-        return Some(model.to_string());
+    if let Some(model) = payload
+        .get("model")
+        .and_then(|value| value.as_str())
+        .and_then(normalize_non_empty_string)
+    {
+        let provider = payload
+            .get("provider")
+            .or_else(|| payload.get("provider_id"))
+            .or_else(|| payload.get("providerID"))
+            .and_then(|value| value.as_str())
+            .and_then(normalize_non_empty_string);
+        return Some(UsageModelKey { model, provider });
     }
     let info = payload.get("info").and_then(|value| value.as_object())?;
-    info.get("model")
+    let model = info
+        .get("model")
+        .or_else(|| info.get("model_id"))
+        .or_else(|| info.get("modelID"))
         .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
+        .and_then(normalize_non_empty_string)?;
+    let provider = info
+        .get("provider")
+        .or_else(|| info.get("provider_id"))
+        .or_else(|| info.get("providerID"))
+        .and_then(|value| value.as_str())
+        .and_then(normalize_non_empty_string);
+    Some(UsageModelKey { model, provider })
 }
 
-fn extract_model_from_token_count(value: &Value) -> Option<String> {
+fn extract_model_from_token_count(value: &Value) -> Option<UsageModelKey> {
     let payload = value.get("payload").and_then(|value| value.as_object())?;
     let info = payload.get("info").and_then(|value| value.as_object());
     let model = info
@@ -666,8 +713,21 @@ fn extract_model_from_token_count(value: &Value) -> Option<String> {
                 .and_then(|value| value.as_str())
         })
         .or_else(|| payload.get("model").and_then(|value| value.as_str()))
-        .or_else(|| value.get("model").and_then(|value| value.as_str()));
-    model.map(|value| value.to_string())
+        .or_else(|| value.get("model").and_then(|value| value.as_str()))
+        .and_then(normalize_non_empty_string)?;
+
+    let provider = info
+        .and_then(|info| {
+            info.get("provider")
+                .or_else(|| info.get("provider_id"))
+                .or_else(|| info.get("providerID"))
+                .and_then(|value| value.as_str())
+        })
+        .or_else(|| payload.get("provider").and_then(|value| value.as_str()))
+        .or_else(|| value.get("provider").and_then(|value| value.as_str()))
+        .and_then(normalize_non_empty_string);
+
+    Some(UsageModelKey { model, provider })
 }
 
 fn find_usage_map<'a>(
@@ -687,6 +747,15 @@ fn read_i64(map: &serde_json::Map<String, Value>, keys: &[&str]) -> i64 {
                 .or_else(|| value.as_f64().map(|value| value as i64))
         })
         .unwrap_or(0)
+}
+
+fn normalize_non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn read_timestamp_ms(value: &Value) -> Option<i64> {

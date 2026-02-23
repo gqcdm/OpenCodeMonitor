@@ -130,6 +130,25 @@ export function Home({
     }).format(date);
   };
 
+  const formatProviderLabel = (value: string | null | undefined) => {
+    if (!value) {
+      return null;
+    }
+    const normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+    const lower = normalized.toLowerCase();
+    if (lower === "openai") return "OpenAI";
+    if (lower === "anthropic") return "Anthropic";
+    if (lower === "google") return "Google";
+    if (lower === "openrouter") return "OpenRouter";
+    if (lower === "xai") return "xAI";
+    if (lower === "deepseek") return "DeepSeek";
+    if (lower === "mistral") return "Mistral";
+    return normalized;
+  };
+
   const usageTotals = localUsageSnapshot?.totals ?? null;
   const usageDays = localUsageSnapshot?.days ?? [];
   const last7Days = usageDays.slice(-7);
@@ -504,18 +523,24 @@ export function Home({
               </div>
               <div className="home-usage-models-list">
                 {localUsageSnapshot?.topModels?.length ? (
-                  localUsageSnapshot.topModels.map((model) => (
-                    <span
-                      className="home-usage-model-chip"
-                      key={model.model}
-                      title={`${model.model}: ${formatCount(model.tokens)} tokens`}
-                    >
-                      {model.model}
-                      <span className="home-usage-model-share">
-                        {model.sharePercent.toFixed(1)}%
+                  localUsageSnapshot.topModels.map((model) => {
+                    const providerLabel = formatProviderLabel(model.provider);
+                    return (
+                      <span
+                        className="home-usage-model-chip"
+                        key={`${model.provider ?? "unknown"}:${model.model}`}
+                        title={`${providerLabel ? `${providerLabel} · ` : ""}${model.model}: ${formatCount(model.tokens)} tokens`}
+                      >
+                        {providerLabel && (
+                          <span className="home-usage-model-provider">{providerLabel}</span>
+                        )}
+                        <span className="home-usage-model-name">{model.model}</span>
+                        <span className="home-usage-model-share">
+                          {model.sharePercent.toFixed(1)}%
+                        </span>
                       </span>
-                    </span>
-                  ))
+                    );
+                  })
                 ) : (
                   <span className="home-usage-model-empty">No models yet</span>
                 )}

@@ -522,6 +522,7 @@ export type LocalUsageTotals = {
 
 export type LocalUsageModel = {
   model: string;
+  provider?: string | null;
   tokens: number;
   sharePercent: number;
 };
