@@ -31,3 +31,6 @@ public/assets/material-icons/
 
 # Nix
 result
+
+# Project memory (agent context)
+.memory/

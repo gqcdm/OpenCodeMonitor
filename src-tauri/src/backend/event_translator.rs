@@ -164,6 +164,11 @@ impl SessionTranslationState {
         }
     }
 
+    fn reset_agent_message_item(&mut self, session_id: &str) {
+        let turn_state = self.get_turn_state_mut(session_id);
+        turn_state.agent_message_item_id = None;
+    }
+
     pub(crate) fn user_message_item(&mut self) -> String {
         if let Some(ref id) = self.user_message_item_id {
             id.clone()
@@ -529,6 +534,7 @@ fn translate_tool_part(
                     "item": item
                 }
             }));
+            state.reset_agent_message_item(thread_id);
         }
         "error" => {
             let error_text = tool_state
@@ -551,6 +557,7 @@ fn translate_tool_part(
                     "item": item
                 }
             }));
+            state.reset_agent_message_item(thread_id);
         }
         _ => {}
     }
@@ -1225,6 +1232,82 @@ mod tests {
         assert_eq!(events[0]["method"], "item/completed");
         assert_eq!(events[0]["params"]["item"]["type"], "fileChange");
         assert_eq!(events[0]["params"]["item"]["status"], "completed");
+    }
+
+    #[test]
+    fn text_after_tool_completion_uses_new_agent_message_item() {
+        let mut state = make_state();
+
+        let first_text = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "part_before_tool",
+                    "sessionID": "ses_test123"
+                },
+                "delta": "Before tool call."
+            }
+        });
+        let before_events = translate_sse_event(&first_text, &mut state);
+        let before_item_id = before_events[0]["params"]["itemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let tool_running = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_split_1",
+                    "sessionID": "ses_test123",
+                    "tool": "bash",
+                    "state": {
+                        "status": "running",
+                        "input": { "command": ["pwd"] }
+                    }
+                }
+            }
+        });
+        translate_sse_event(&tool_running, &mut state);
+
+        let tool_completed = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_split_1",
+                    "sessionID": "ses_test123",
+                    "tool": "bash",
+                    "state": {
+                        "status": "completed",
+                        "input": { "command": ["pwd"] },
+                        "output": "/Users/jacob"
+                    }
+                }
+            }
+        });
+        translate_sse_event(&tool_completed, &mut state);
+
+        let second_text = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "part_after_tool",
+                    "sessionID": "ses_test123"
+                },
+                "delta": "After tool call."
+            }
+        });
+        let after_events = translate_sse_event(&second_text, &mut state);
+        let after_item_id = after_events[0]["params"]["itemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert_ne!(before_item_id, after_item_id);
     }
 
     #[test]
