@@ -144,6 +144,7 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
     }
 
     let mut replay_item_counter = 0u64;
+    let mut latest_assistant_info: Option<Value> = None;
 
     if let Some(msg_list) = messages.as_array() {
         for msg_entry in msg_list {
@@ -152,6 +153,12 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
                 .and_then(|i| i.get("role"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("assistant");
+
+            if role == "assistant" {
+                if let Some(info) = msg_entry.get("info") {
+                    latest_assistant_info = Some(info.clone());
+                }
+            }
 
             let parts = msg_entry
                 .get("parts")
@@ -289,6 +296,27 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
         }
     }
 
+    if let Some(info) = latest_assistant_info {
+        let replay_usage_event = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": info
+            }
+        });
+
+        let translated = {
+            let mut ts = session.translation_state.lock().await;
+            event_translator::translate_sse_event(&replay_usage_event, &mut ts)
+        };
+
+        for message in translated {
+            event_sink.emit_app_server_event(AppServerEvent {
+                workspace_id: workspace_id.clone(),
+                message,
+            });
+        }
+    }
+
     Ok(json!({
         "result": {
             "thread": { "id": thread_id }
@@ -325,15 +353,13 @@ fn replay_build_tool_item(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or_else(|| {
-                        inp.get("command")
-                            .and_then(|v| v.as_array())
-                            .map(|parts| {
-                                parts
-                                    .iter()
-                                    .filter_map(|v| v.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            })
+                        inp.get("command").and_then(|v| v.as_array()).map(|parts| {
+                            parts
+                                .iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
                     })
             })
             .unwrap_or_else(|| tool_name.to_string());
@@ -405,17 +431,11 @@ pub(crate) async fn list_threads_core(
     let data: Vec<Value> = sessions_arr
         .into_iter()
         .filter_map(|s| {
-            let id = s
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
+            let id = s.get("id").and_then(|v| v.as_str()).unwrap_or_default();
             if !include_hidden && hidden_session_ids.contains(id) {
                 return None;
             }
-            let title = s
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
+            let title = s.get("title").and_then(|v| v.as_str()).unwrap_or_default();
             let updated_at = s
                 .get("updatedAt")
                 .or_else(|| s.get("updated_at"))
@@ -547,8 +567,7 @@ async fn build_rest_prompt_parts(
                 match std::fs::read(trimmed) {
                     Ok(bytes) => {
                         use base64::Engine;
-                        let encoded =
-                            base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
                         let mime = mime_from_extension(trimmed);
                         let filename = std::path::Path::new(trimmed)
                             .file_name()
@@ -1053,6 +1072,12 @@ pub(crate) async fn model_list_core(
         }
     };
 
+    let context_windows = event_translator::extract_model_context_windows(&providers);
+    {
+        let mut state = session.translation_state.lock().await;
+        state.replace_model_context_windows(context_windows);
+    }
+
     // REST returns:
     //   providers: [{ id, models: { "model-id": { id, name, ... }, ... } }]
     //   default:   { "provider-id": "model-id", ... }
@@ -1155,7 +1180,11 @@ pub(crate) async fn respond_to_server_request_core(
         let body = json!({ "answers": answers_array });
         let path = format!("/question/{resource_id}/reply");
         session.rest_post_bool(&path, body).await?;
-    } else if result.get("reject").and_then(|v| v.as_bool()).unwrap_or(false) {
+    } else if result
+        .get("reject")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         // Question rejection: POST /question/:id/reject
         let path = format!("/question/{resource_id}/reject");
         session.rest_post_bool(&path, json!({})).await?;
@@ -1189,7 +1218,12 @@ fn transform_question_answers(answers: &Value) -> Value {
         .collect();
 
     entries.sort_by_key(|(idx, _)| *idx);
-    Value::Array(entries.into_iter().map(|(_, arr)| Value::Array(arr)).collect())
+    Value::Array(
+        entries
+            .into_iter()
+            .map(|(_, arr)| Value::Array(arr))
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------------------

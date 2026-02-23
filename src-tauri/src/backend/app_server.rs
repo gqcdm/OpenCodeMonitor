@@ -279,13 +279,9 @@ mod urlencoding {
         let mut out = String::with_capacity(input.len() * 3);
         for byte in input.bytes() {
             match byte {
-                b'A'..=b'Z'
-                | b'a'..=b'z'
-                | b'0'..=b'9'
-                | b'-'
-                | b'_'
-                | b'.'
-                | b'~' => out.push(byte as char),
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(byte as char)
+                }
                 _ => {
                     let _ = write!(out, "%{byte:02X}");
                 }
@@ -689,7 +685,11 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         // Fetch provider/model config.
         match prewarm_session.rest_get("/config/providers").await {
             Ok(providers) => {
+                let context_windows = event_translator::extract_model_context_windows(&providers);
                 *prewarm_session.models_cache.lock().await = Some(providers);
+                let mut state = prewarm_session.translation_state.lock().await;
+                state.replace_model_context_windows(context_windows);
+                drop(state);
 
                 let payload = AppServerEvent {
                     workspace_id: prewarm_workspace_id.clone(),
@@ -798,14 +798,8 @@ mod tests {
 
     #[test]
     fn urlencoding_handles_special_chars() {
-        assert_eq!(
-            super::urlencoding::encode("/tmp/test"),
-            "%2Ftmp%2Ftest"
-        );
-        assert_eq!(
-            super::urlencoding::encode("hello world"),
-            "hello%20world"
-        );
+        assert_eq!(super::urlencoding::encode("/tmp/test"), "%2Ftmp%2Ftest");
+        assert_eq!(super::urlencoding::encode("hello world"), "hello%20world");
         assert_eq!(
             super::urlencoding::encode("abc-def_123.txt~"),
             "abc-def_123.txt~"

@@ -43,6 +43,8 @@ pub(crate) struct SessionTranslationState {
     pub(crate) user_message_item_id: Option<String>,
     /// Buffered text for contiguous user-message chunk streams.
     pub(crate) user_message_text: String,
+    /// Model context windows keyed by `providerID/modelID`.
+    model_context_windows: HashMap<String, u64>,
 }
 
 impl SessionTranslationState {
@@ -53,7 +55,47 @@ impl SessionTranslationState {
             item_counter: AtomicU64::new(1),
             user_message_item_id: None,
             user_message_text: String::new(),
+            model_context_windows: HashMap::new(),
         }
+    }
+
+    pub(crate) fn replace_model_context_windows(&mut self, windows: HashMap<String, u64>) {
+        self.model_context_windows = windows;
+    }
+
+    pub(crate) fn model_context_window(&self, provider_id: &str, model_id: &str) -> Option<u64> {
+        let provider = provider_id.trim();
+        let model = model_id.trim();
+        if provider.is_empty() && model.is_empty() {
+            return None;
+        }
+
+        if !provider.is_empty() && !model.is_empty() {
+            let key = format!("{provider}/{model}");
+            if let Some(value) = self.model_context_windows.get(&key) {
+                return Some(*value);
+            }
+        }
+
+        if model.contains('/') {
+            if let Some(value) = self.model_context_windows.get(model) {
+                return Some(*value);
+            }
+            if let Some((model_provider, model_id_only)) = model.split_once('/') {
+                let qualified = format!("{model_provider}/{model_id_only}");
+                if let Some(value) = self.model_context_windows.get(&qualified) {
+                    return Some(*value);
+                }
+                if !provider.is_empty() {
+                    let fallback = format!("{provider}/{model_id_only}");
+                    if let Some(value) = self.model_context_windows.get(&fallback) {
+                        return Some(*value);
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     fn next_item_id(&self) -> String {
@@ -140,6 +182,67 @@ impl SessionTranslationState {
             turn_state.reasoning_part_id = None;
         }
     }
+}
+
+fn parse_u64(value: Option<&Value>) -> Option<u64> {
+    value
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_i64().and_then(|n| (n > 0).then_some(n as u64)))
+        })
+        .or_else(|| {
+            value
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse::<u64>().ok())
+                .filter(|n| *n > 0)
+        })
+}
+
+pub(crate) fn extract_model_context_windows(config_providers: &Value) -> HashMap<String, u64> {
+    let mut windows = HashMap::new();
+
+    let providers = config_providers
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    for provider in &providers {
+        let provider_id = provider
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+        if provider_id.is_empty() {
+            continue;
+        }
+
+        let Some(models) = provider.get("models").and_then(|v| v.as_object()) else {
+            continue;
+        };
+
+        for (fallback_model_id, model) in models {
+            let model_id = model
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(fallback_model_id.as_str());
+            if model_id.is_empty() {
+                continue;
+            }
+
+            let context = parse_u64(model.get("limit").and_then(|v| v.get("context")));
+            if let Some(context) = context {
+                let key = format!("{provider_id}/{model_id}");
+                windows.insert(key, context);
+            }
+        }
+    }
+
+    windows
 }
 
 // ---------------------------------------------------------------------------
@@ -476,31 +579,55 @@ fn translate_message_updated(
 
     let thread_id = state.session_id.clone();
 
+    let model = info.get("model");
+    let provider_id = info
+        .get("providerID")
+        .or_else(|| info.get("provider_id"))
+        .or_else(|| model.and_then(|m| m.get("providerID")))
+        .or_else(|| model.and_then(|m| m.get("provider_id")))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let model_id = info
+        .get("modelID")
+        .or_else(|| info.get("model_id"))
+        .or_else(|| model.and_then(|m| m.get("modelID")))
+        .or_else(|| model.and_then(|m| m.get("model_id")))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let model_context_window = state
+        .model_context_window(provider_id, model_id)
+        .unwrap_or(0);
+
     // Token usage: try nested `tokens` object first (current format), then flat keys (legacy).
     let tokens = info.get("tokens");
-    let input_tokens = tokens
-        .and_then(|t| t.get("input"))
-        .or_else(|| info.get("inputTokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let output_tokens = tokens
-        .and_then(|t| t.get("output"))
-        .or_else(|| info.get("outputTokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cached_tokens = tokens
-        .and_then(|t| t.get("cache").and_then(|c| c.get("read")))
-        .or_else(|| info.get("cachedInputTokens"))
-        .or_else(|| info.get("cacheReadInputTokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let reasoning_tokens = tokens
-        .and_then(|t| t.get("reasoning"))
-        .or_else(|| info.get("reasoningOutputTokens"))
-        .or_else(|| info.get("reasoningTokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let total = input_tokens + output_tokens;
+    let input_tokens = parse_u64(
+        tokens
+            .and_then(|t| t.get("input"))
+            .or_else(|| info.get("inputTokens")),
+    )
+    .unwrap_or(0);
+    let output_tokens = parse_u64(
+        tokens
+            .and_then(|t| t.get("output"))
+            .or_else(|| info.get("outputTokens")),
+    )
+    .unwrap_or(0);
+    let cached_tokens = parse_u64(
+        tokens
+            .and_then(|t| t.get("cache").and_then(|c| c.get("read")))
+            .or_else(|| info.get("cachedInputTokens"))
+            .or_else(|| info.get("cacheReadInputTokens")),
+    )
+    .unwrap_or(0);
+    let reasoning_tokens = parse_u64(
+        tokens
+            .and_then(|t| t.get("reasoning"))
+            .or_else(|| info.get("reasoningOutputTokens"))
+            .or_else(|| info.get("reasoningTokens")),
+    )
+    .unwrap_or(0);
+    let total =
+        parse_u64(tokens.and_then(|t| t.get("total"))).unwrap_or(input_tokens + output_tokens);
 
     if total == 0 {
         return vec![];
@@ -525,7 +652,7 @@ fn translate_message_updated(
                     "outputTokens": output_tokens,
                     "reasoningOutputTokens": reasoning_tokens
                 },
-                "modelContextWindow": 0
+                "modelContextWindow": model_context_window
             }
         }
     })]
@@ -983,6 +1110,7 @@ fn build_tool_item(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn make_state() -> SessionTranslationState {
         let mut s = SessionTranslationState::new("ses_test123".into());
@@ -1128,6 +1256,68 @@ mod tests {
             events[0]["params"]["tokenUsage"]["total"]["outputTokens"],
             1000
         );
+    }
+
+    #[test]
+    fn message_updated_uses_model_context_window_when_available() {
+        let mut state = make_state();
+        let mut windows = HashMap::new();
+        windows.insert("anthropic/claude-sonnet-4-5".to_string(), 200_000);
+        state.replace_model_context_windows(windows);
+
+        let event = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "providerID": "anthropic",
+                    "modelID": "claude-sonnet-4-5",
+                    "tokens": {
+                        "input": 1200,
+                        "output": 300,
+                        "reasoning": 50,
+                        "cache": { "read": 25, "write": 0 }
+                    }
+                }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "thread/tokenUsage/updated");
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["modelContextWindow"],
+            200_000
+        );
+    }
+
+    #[test]
+    fn extract_model_context_windows_reads_provider_limits() {
+        let payload = json!({
+            "providers": [
+                {
+                    "id": "anthropic",
+                    "models": {
+                        "claude-sonnet-4-5": {
+                            "id": "claude-sonnet-4-5",
+                            "limit": {
+                                "context": 200000,
+                                "output": 8192
+                            }
+                        },
+                        "claude-haiku-4-5": {
+                            "id": "claude-haiku-4-5",
+                            "limit": {
+                                "context": "100000"
+                            }
+                        }
+                    }
+                }
+            ]
+        });
+
+        let windows = extract_model_context_windows(&payload);
+        assert_eq!(windows.get("anthropic/claude-sonnet-4-5"), Some(&200_000));
+        assert_eq!(windows.get("anthropic/claude-haiku-4-5"), Some(&100_000));
     }
 
     #[test]
