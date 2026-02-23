@@ -418,8 +418,14 @@ pub(crate) async fn list_threads_core(
                 .unwrap_or_default();
             let updated_at = s
                 .get("updatedAt")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
+                .or_else(|| s.get("updated_at"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let created_at = s
+                .get("createdAt")
+                .or_else(|| s.get("created_at"))
+                .cloned()
+                .unwrap_or_else(|| updated_at.clone());
             let directory = s
                 .get("directory")
                 .and_then(|v| v.as_str())
@@ -436,7 +442,7 @@ pub(crate) async fn list_threads_core(
                 "name": title,
                 "preview": title,
                 "updatedAt": updated_at,
-                "createdAt": updated_at
+                "createdAt": created_at
             });
             if let Some(pid) = parent_id {
                 entry["parentId"] = json!(pid);

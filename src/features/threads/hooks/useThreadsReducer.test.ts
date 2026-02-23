@@ -48,6 +48,91 @@ describe("threadReducer", () => {
     }
   });
 
+  it("does not bump thread ordering when replaying an existing user message", () => {
+    const next = threadReducer(
+      {
+        ...initialState,
+        threadsByWorkspace: {
+          "ws-1": [
+            { id: "thread-1", name: "Agent 1", updatedAt: 2 },
+            { id: "thread-2", name: "Agent 2", updatedAt: 1 },
+          ],
+        },
+        threadSortKeyByWorkspace: { "ws-1": "updated_at" },
+        itemsByThread: {
+          "thread-2": [
+            {
+              id: "user-1",
+              kind: "message",
+              role: "user",
+              text: "Hello there",
+            },
+          ],
+        },
+      },
+      {
+        type: "upsertItem",
+        workspaceId: "ws-1",
+        threadId: "thread-2",
+        item: {
+          id: "user-1",
+          kind: "message",
+          role: "user",
+          text: "Hello there",
+        },
+        hasCustomName: false,
+      },
+    );
+
+    expect(next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+  });
+
+  it("does not bump thread ordering for replayed user messages with new ids", () => {
+    const next = threadReducer(
+      {
+        ...initialState,
+        threadsByWorkspace: {
+          "ws-1": [
+            { id: "thread-1", name: "Agent 1", updatedAt: 2 },
+            { id: "thread-2", name: "Agent 2", updatedAt: 1 },
+          ],
+        },
+        threadSortKeyByWorkspace: { "ws-1": "updated_at" },
+        itemsByThread: {
+          "thread-2": [
+            {
+              id: "history-user-1",
+              kind: "message",
+              role: "user",
+              text: "Hello there",
+            },
+          ],
+        },
+      },
+      {
+        type: "upsertItem",
+        workspaceId: "ws-1",
+        threadId: "thread-2",
+        item: {
+          id: "replay_item_8",
+          kind: "message",
+          role: "user",
+          text: "Hello there",
+        },
+        hasCustomName: false,
+        isReplay: true,
+      },
+    );
+
+    expect(next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+  });
+
   it("renames auto-generated thread from assistant output when no user message", () => {
     const threads: ThreadSummary[] = [
       { id: "thread-1", name: "New Agent", updatedAt: 1 },

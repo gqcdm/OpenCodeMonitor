@@ -245,6 +245,27 @@ describe("useAppServerEvents", () => {
       threadId: "thread-1",
       itemId: "item-2",
       text: "Done",
+      isReplay: false,
+    });
+
+    act(() => {
+      listener?.({
+        workspace_id: "ws-1",
+        message: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: { type: "agentMessage", id: "replay_item_1", text: "Old" },
+          },
+        },
+      });
+    });
+    expect(handlers.onAgentMessageCompleted).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      itemId: "replay_item_1",
+      text: "Old",
+      isReplay: true,
     });
 
     act(() => {

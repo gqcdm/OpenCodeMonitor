@@ -228,6 +228,7 @@ describe("useThreads UX integration", () => {
         threadId: "thread-3",
         itemId: "local-assistant-1",
         text: "Local response",
+        isReplay: false,
       });
     });
 

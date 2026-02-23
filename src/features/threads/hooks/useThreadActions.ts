@@ -495,15 +495,15 @@ export function useThreadActions({
           threadActivityRef.current = next;
           saveThreadActivity(next);
         }
+        const getEffectiveTimestamp = (thread: Record<string, unknown>) => {
+          const threadId = String(thread?.id ?? "");
+          const baseTimestamp = getThreadTimestamp(thread);
+          const activityTimestamp = nextActivityByThread[threadId] ?? 0;
+          return Math.max(baseTimestamp, activityTimestamp);
+        };
         if (requestedSortKey === "updated_at") {
           uniqueThreads.sort((a, b) => {
-            const aId = String(a?.id ?? "");
-            const bId = String(b?.id ?? "");
-            const aCreated = getThreadTimestamp(a);
-            const bCreated = getThreadTimestamp(b);
-            const aActivity = Math.max(nextActivityByThread[aId] ?? 0, aCreated);
-            const bActivity = Math.max(nextActivityByThread[bId] ?? 0, bCreated);
-            return bActivity - aActivity;
+            return getEffectiveTimestamp(b) - getEffectiveTimestamp(a);
           });
         } else {
           uniqueThreads.sort((a, b) => {
@@ -535,7 +535,7 @@ export function useThreadActions({
             return {
               id,
               name,
-              updatedAt: getThreadTimestamp(thread),
+              updatedAt: getEffectiveTimestamp(thread),
             };
           })
           .filter((entry) => entry.id);
@@ -558,11 +558,12 @@ export function useThreadActions({
           if (!threadId || !message) {
             return;
           }
+          const timestamp = getEffectiveTimestamp(thread);
           dispatch({
             type: "setLastAgentMessage",
             threadId,
             text: message,
-            timestamp: getThreadTimestamp(thread),
+            timestamp,
           });
         });
       } catch (error) {
@@ -615,6 +616,9 @@ export function useThreadActions({
         payload: { workspaceId: workspace.id, cursor: nextCursor },
       });
       try {
+        const activityByThread = threadActivityRef.current[workspace.id] ?? {};
+        const nextActivityByThread = { ...activityByThread };
+        let didChangeActivity = false;
         const matchingThreads: Record<string, unknown>[] = [];
         const maxPagesWithoutMatch = THREAD_LIST_MAX_PAGES_OLDER;
         let pagesFetched = 0;
@@ -663,6 +667,11 @@ export function useThreadActions({
           if (!id || existingIds.has(id)) {
             return;
           }
+          const timestamp = getThreadTimestamp(thread);
+          if (timestamp > (nextActivityByThread[id] ?? 0)) {
+            nextActivityByThread[id] = timestamp;
+            didChangeActivity = true;
+          }
           const sourceParentId = getParentThreadIdFromSource(thread.source);
           const directParentId = asString(thread.parentId ?? thread.parent_id ?? "").trim() || null;
           const resolvedParentId = sourceParentId ?? directParentId;
@@ -681,9 +690,22 @@ export function useThreadActions({
                 ? `${nameSeed.slice(0, 38)}…`
                 : nameSeed
               : fallbackName;
-          additions.push({ id, name, updatedAt: getThreadTimestamp(thread) });
+          additions.push({
+            id,
+            name,
+            updatedAt: Math.max(timestamp, nextActivityByThread[id] ?? 0),
+          });
           existingIds.add(id);
         });
+
+        if (didChangeActivity) {
+          const next = {
+            ...threadActivityRef.current,
+            [workspace.id]: nextActivityByThread,
+          };
+          threadActivityRef.current = next;
+          saveThreadActivity(next);
+        }
 
         if (additions.length > 0) {
           dispatch({
@@ -706,11 +728,15 @@ export function useThreadActions({
           if (!threadId || !message) {
             return;
           }
+          const timestamp = Math.max(
+            getThreadTimestamp(thread),
+            nextActivityByThread[threadId] ?? 0,
+          );
           dispatch({
             type: "setLastAgentMessage",
             threadId,
             text: message,
-            timestamp: getThreadTimestamp(thread),
+            timestamp,
           });
         });
       } catch (error) {

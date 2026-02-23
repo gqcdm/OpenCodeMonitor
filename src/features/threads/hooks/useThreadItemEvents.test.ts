@@ -192,6 +192,39 @@ describe("useThreadItemEvents", () => {
     );
   });
 
+  it("does not treat replayed user messages as new activity", () => {
+    const onUserMessageCreated = vi.fn();
+    vi.mocked(buildConversationItem).mockReturnValue({
+      id: "item-2",
+      kind: "message",
+      role: "user",
+      text: "Hello from history",
+    });
+    const { result, dispatch } = makeOptions({ onUserMessageCreated });
+
+    act(() => {
+      result.current.onItemCompleted("ws-1", "thread-1", {
+        type: "userMessage",
+        id: "replay_item_2",
+      });
+    });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "upsertItem",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      item: {
+        id: "item-2",
+        kind: "message",
+        role: "user",
+        text: "Hello from history",
+      },
+      hasCustomName: false,
+      isReplay: true,
+    });
+    expect(onUserMessageCreated).not.toHaveBeenCalled();
+  });
+
   it("marks processing and appends agent deltas", () => {
     const { result, dispatch, markProcessing } = makeOptions();
 
@@ -232,6 +265,7 @@ describe("useThreadItemEvents", () => {
         threadId: "thread-1",
         itemId: "assistant-1",
         text: "Done",
+        isReplay: false,
       });
     });
 
@@ -267,6 +301,41 @@ describe("useThreadItemEvents", () => {
       threadId: "thread-1",
       hasUnread: true,
     });
+
+    nowSpy.mockRestore();
+  });
+
+  it("does not update thread timestamp for non-active empty completions", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(9999);
+    const { result, dispatch, recordThreadActivity } = makeOptions({
+      hasActiveTurn: () => false,
+    });
+
+    act(() => {
+      result.current.onAgentMessageCompleted({
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        itemId: "assistant-1",
+        text: "",
+        isReplay: true,
+      });
+    });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "completeAgentMessage",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      itemId: "assistant-1",
+      text: "",
+      hasCustomName: false,
+    });
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "setThreadTimestamp" }),
+    );
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "setLastAgentMessage" }),
+    );
+    expect(recordThreadActivity).not.toHaveBeenCalled();
 
     nowSpy.mockRestore();
   });

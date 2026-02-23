@@ -26,6 +26,7 @@ type AgentCompleted = {
   threadId: string;
   itemId: string;
   text: string;
+  isReplay: boolean;
 };
 
 type AppServerEventHandlers = {
@@ -388,12 +389,17 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         if (threadId && item?.type === "agentMessage") {
           const itemId = String(item.id ?? "");
           const text = String(item.text ?? "");
+          const isReplay =
+            item.replay === true ||
+            item.replayed === true ||
+            itemId.startsWith("replay_item_");
           if (itemId) {
             currentHandlers.onAgentMessageCompleted?.({
               workspaceId: workspace_id,
               threadId,
               itemId,
               text,
+              isReplay,
             });
           }
         }

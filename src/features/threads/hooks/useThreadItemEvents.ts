@@ -55,6 +55,9 @@ export function useThreadItemEvents({
       }
       applyCollabThreadLinks(threadId, item);
       const itemType = asString(item?.type ?? "");
+      const itemId = asString(item?.id ?? "");
+      const isReplay =
+        item.replay === true || item.replayed === true || itemId.startsWith("replay_item_");
       if (itemType === "enteredReviewMode") {
         markReviewing(threadId, true);
       } else if (itemType === "exitedReviewMode") {
@@ -73,7 +76,7 @@ export function useThreadItemEvents({
           : item;
       const converted = buildConversationItem(itemForDisplay);
       if (converted) {
-        if (converted.kind === "message" && converted.role === "user") {
+        if (!isReplay && converted.kind === "message" && converted.role === "user") {
           void onUserMessageCreated?.(workspaceId, threadId, converted.text);
         }
         dispatch({
@@ -82,6 +85,7 @@ export function useThreadItemEvents({
           threadId,
           item: converted,
           hasCustomName: Boolean(getCustomName(workspaceId, threadId)),
+          ...(isReplay ? { isReplay: true } : {}),
         });
       }
       safeMessageActivity();
@@ -157,13 +161,17 @@ export function useThreadItemEvents({
       threadId,
       itemId,
       text,
+      isReplay = false,
     }: {
       workspaceId: string;
       threadId: string;
       itemId: string;
       text: string;
+      isReplay?: boolean;
     }) => {
-      const timestamp = Date.now();
+      const hasText = text.trim().length > 0;
+      const shouldRecordActivity = !isReplay && (hasActiveTurn(threadId) || hasText);
+      const timestamp = shouldRecordActivity ? Date.now() : null;
       dispatch({ type: "ensureThread", workspaceId, threadId });
       const hasCustomName = Boolean(getCustomName(workspaceId, threadId));
       dispatch({
@@ -174,19 +182,23 @@ export function useThreadItemEvents({
         text,
         hasCustomName,
       });
-      dispatch({
-        type: "setThreadTimestamp",
-        workspaceId,
-        threadId,
-        timestamp,
-      });
-      dispatch({
-        type: "setLastAgentMessage",
-        threadId,
-        text,
-        timestamp,
-      });
-      recordThreadActivity(workspaceId, threadId, timestamp);
+      if (timestamp !== null) {
+        dispatch({
+          type: "setThreadTimestamp",
+          workspaceId,
+          threadId,
+          timestamp,
+        });
+        if (hasText) {
+          dispatch({
+            type: "setLastAgentMessage",
+            threadId,
+            text,
+            timestamp,
+          });
+        }
+        recordThreadActivity(workspaceId, threadId, timestamp);
+      }
       safeMessageActivity();
       if (threadId !== activeThreadId) {
         dispatch({ type: "markUnread", threadId, hasUnread: true });
@@ -196,6 +208,7 @@ export function useThreadItemEvents({
       activeThreadId,
       dispatch,
       getCustomName,
+      hasActiveTurn,
       recordThreadActivity,
       safeMessageActivity,
     ],

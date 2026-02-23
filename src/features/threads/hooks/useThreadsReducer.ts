@@ -89,6 +89,7 @@ export type ThreadAction =
       threadId: string;
       item: ConversationItem;
       hasCustomName?: boolean;
+      isReplay?: boolean;
     }
   | { type: "setThreadItems"; threadId: string; items: ConversationItem[] }
   | {
