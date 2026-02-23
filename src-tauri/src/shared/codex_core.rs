@@ -831,12 +831,13 @@ pub(crate) async fn model_list_core(
         }
     };
 
-    // REST returns { providers: [{ id, models: [{ id, name }] }], default: { ... } }.
-    let default_config = providers.get("default").cloned().unwrap_or(json!({}));
-    let default_model = default_config
-        .as_object()
-        .and_then(|m| m.values().next())
-        .and_then(|v| v.as_str())
+    // REST returns:
+    //   providers: [{ id, models: { "model-id": { id, name, ... }, ... } }]
+    //   default:   { "provider-id": "model-id", ... }
+    let defaults = providers
+        .get("default")
+        .and_then(|v| v.as_object())
+        .cloned()
         .unwrap_or_default();
 
     let provider_list = providers
@@ -851,12 +852,17 @@ pub(crate) async fn model_list_core(
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        let models = provider
+        let default_for_provider = defaults
+            .get(provider_id)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        // `models` is a map { "model-id": { id, name, ... } }, not an array.
+        let models_map = provider
             .get("models")
-            .and_then(|v| v.as_array())
+            .and_then(|v| v.as_object())
             .cloned()
             .unwrap_or_default();
-        for model in models {
+        for (_key, model) in &models_map {
             let model_id = model
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -873,7 +879,7 @@ pub(crate) async fn model_list_core(
                 .trim()
                 .to_string();
             let qualified_id = format!("{provider_id}/{model_id}");
-            let is_default = qualified_id == default_model || model_id == default_model;
+            let is_default = model_id == default_for_provider;
             data.push(json!({
                 "id": qualified_id,
                 "model": model_id,

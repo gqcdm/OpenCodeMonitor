@@ -312,6 +312,45 @@ export function useModels({
     return unsub;
   }, [isConnected, refreshModels, workspaceId]);
 
+  // Retry loading models when connected but the list is empty.
+  // The initial fetch may return empty if the OpenCode server hasn't finished
+  // starting, and the codex/modelsReady event may fire before the frontend
+  // subscribes — leaving models stuck at "Loading models..." with no trigger
+  // to retry.
+  useEffect(() => {
+    if (!workspaceId || !isConnected || models.length > 0) {
+      return;
+    }
+    let cancelled = false;
+    let attempts = 0;
+    let timerId: ReturnType<typeof setTimeout>;
+    const MAX_ATTEMPTS = 10;
+    const BASE_DELAY = 1500;
+    const MAX_DELAY = 15_000;
+
+    const scheduleRetry = () => {
+      if (cancelled || attempts >= MAX_ATTEMPTS) {
+        return;
+      }
+      const delay = Math.min(BASE_DELAY * Math.pow(2, attempts), MAX_DELAY);
+      attempts += 1;
+      timerId = setTimeout(() => {
+        if (cancelled) {
+          return;
+        }
+        refreshModels();
+        scheduleRetry();
+      }, delay);
+    };
+
+    scheduleRetry();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timerId);
+    };
+  }, [workspaceId, isConnected, models.length, refreshModels]);
+
   useEffect(() => {
     if (!selectedModel) {
       return;
