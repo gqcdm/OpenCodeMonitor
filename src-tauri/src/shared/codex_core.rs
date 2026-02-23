@@ -98,17 +98,6 @@ pub(crate) async fn start_thread_core(
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
 
-    // Reuse the pre-warmed session if available.
-    if let Some(session_id) = session.prewarmed_session_id.lock().await.take() {
-        let mut ts = session.translation_state.lock().await;
-        ts.session_id = session_id.clone();
-        return Ok(json!({
-            "result": {
-                "thread": { "id": session_id }
-            }
-        }));
-    }
-
     // POST /session → { id, projectID, directory }
     let response = session.rest_post("/session", json!({})).await?;
     let session_id = response
@@ -439,11 +428,17 @@ pub(crate) async fn list_threads_core(
             let updated_at = s
                 .get("updatedAt")
                 .or_else(|| s.get("updated_at"))
+                .or_else(|| s.get("time").and_then(|time| time.get("updated")))
+                .or_else(|| s.get("time").and_then(|time| time.get("updatedAt")))
+                .or_else(|| s.get("time").and_then(|time| time.get("updated_at")))
                 .cloned()
                 .unwrap_or(Value::Null);
             let created_at = s
                 .get("createdAt")
                 .or_else(|| s.get("created_at"))
+                .or_else(|| s.get("time").and_then(|time| time.get("created")))
+                .or_else(|| s.get("time").and_then(|time| time.get("createdAt")))
+                .or_else(|| s.get("time").and_then(|time| time.get("created_at")))
                 .cloned()
                 .unwrap_or_else(|| updated_at.clone());
             let directory = s

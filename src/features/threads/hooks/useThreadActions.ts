@@ -103,7 +103,26 @@ export function useThreadActions({
         });
         const threadId = extractThreadId(response);
         if (threadId) {
+          const timestamp = Date.now();
+          const workspaceActivity = threadActivityRef.current[workspaceId] ?? {};
+          if (timestamp > (workspaceActivity[threadId] ?? 0)) {
+            const nextActivity = {
+              ...threadActivityRef.current,
+              [workspaceId]: {
+                ...workspaceActivity,
+                [threadId]: timestamp,
+              },
+            };
+            threadActivityRef.current = nextActivity;
+            saveThreadActivity(nextActivity);
+          }
           dispatch({ type: "ensureThread", workspaceId, threadId });
+          dispatch({
+            type: "setThreadTimestamp",
+            workspaceId,
+            threadId,
+            timestamp,
+          });
           if (shouldActivate) {
             dispatch({ type: "setActiveThreadId", workspaceId, threadId });
           }
@@ -122,7 +141,7 @@ export function useThreadActions({
         throw error;
       }
     },
-    [dispatch, extractThreadId, loadedThreadsRef, onDebug],
+    [dispatch, extractThreadId, loadedThreadsRef, onDebug, threadActivityRef],
   );
 
   const resumeThreadForWorkspace = useCallback(

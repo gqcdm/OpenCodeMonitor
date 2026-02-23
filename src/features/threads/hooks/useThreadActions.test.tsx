@@ -102,7 +102,8 @@ describe("useThreadActions", () => {
       result: { thread: { id: "thread-1" } },
     });
 
-    const { result, dispatch, loadedThreadsRef } = renderActions();
+    const { result, dispatch, loadedThreadsRef, threadActivityRef } =
+      renderActions();
 
     let threadId: string | null = null;
     await act(async () => {
@@ -121,7 +122,23 @@ describe("useThreadActions", () => {
       workspaceId: "ws-1",
       threadId: "thread-1",
     });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "setThreadTimestamp",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        timestamp: expect.any(Number),
+      }),
+    );
     expect(loadedThreadsRef.current["thread-1"]).toBe(true);
+    expect(threadActivityRef.current["ws-1"]?.["thread-1"]).toEqual(
+      expect.any(Number),
+    );
+    expect(saveThreadActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        "ws-1": expect.objectContaining({ "thread-1": expect.any(Number) }),
+      }),
+    );
   });
 
   it("forks a thread and activates the fork", async () => {

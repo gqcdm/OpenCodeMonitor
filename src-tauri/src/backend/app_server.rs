@@ -156,9 +156,6 @@ pub(crate) struct WorkspaceSession {
     pub(crate) translation_state: Mutex<SessionTranslationState>,
     /// Cached model/provider data from `GET /config/providers`.
     pub(crate) models_cache: Mutex<Option<Value>>,
-    /// Pre-warmed OpenCode session ID created eagerly on workspace connect.
-    /// Consumed by the first `start_thread` call to avoid a duplicate `POST /session`.
-    pub(crate) prewarmed_session_id: Mutex<Option<String>>,
     /// One in-flight prompt at a time per workspace session.
     pub(crate) prompt_lock: Mutex<()>,
     /// Sender to signal SSE reader shutdown when workspace disconnects.
@@ -634,7 +631,6 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         background_thread_callbacks: Mutex::new(HashMap::new()),
         translation_state: Mutex::new(SessionTranslationState::new(String::new())),
         models_cache: Mutex::new(None),
-        prewarmed_session_id: Mutex::new(None),
         prompt_lock: Mutex::new(()),
         shutdown_tx,
     });
@@ -656,32 +652,11 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     };
     event_sink.emit_app_server_event(payload);
 
-    // Eagerly create a session and fetch providers to populate the model selector.
+    // Eagerly fetch providers to populate the model selector.
     let prewarm_session = Arc::clone(&session);
     let prewarm_sink = event_sink.clone();
     let prewarm_workspace_id = entry.id.clone();
     tokio::spawn(async move {
-        // Create a session.
-        match prewarm_session.rest_post("/session", json!({})).await {
-            Ok(response) => {
-                let session_id = response
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-
-                if !session_id.is_empty() {
-                    *prewarm_session.prewarmed_session_id.lock().await = Some(session_id);
-                }
-            }
-            Err(err) => {
-                eprintln!(
-                    "Pre-warm POST /session failed for {}: {}",
-                    prewarm_workspace_id, err
-                );
-            }
-        }
-
         // Fetch provider/model config.
         match prewarm_session.rest_get("/config/providers").await {
             Ok(providers) => {
