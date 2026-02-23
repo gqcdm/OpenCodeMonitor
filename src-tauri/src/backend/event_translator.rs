@@ -7,6 +7,7 @@
 //! OpenCode ↔ CodexMonitor translation happens here in Rust.
 
 use serde_json::{json, Value};
+use similar::TextDiff;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1307,6 +1308,36 @@ fn file_path_from_raw_input(raw_input: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Generate a unified diff from oldString/newString edit input.
+/// Returns a unified diff string with @@ hunk headers that the frontend can render.
+fn generate_edit_diff(raw_input: &Value, file_path: &str) -> Option<String> {
+    let old_string = raw_input.get("oldString").and_then(|v| v.as_str())?;
+    let new_string = raw_input.get("newString").and_then(|v| v.as_str())?;
+
+    // Don't generate diff for empty old/new (pure create or delete)
+    if old_string.is_empty() && new_string.is_empty() {
+        return None;
+    }
+
+    let diff = TextDiff::from_lines(old_string, new_string);
+    let mut output = String::new();
+
+    // Add file header
+    output.push_str(&format!("--- a/{file_path}\n"));
+    output.push_str(&format!("+++ b/{file_path}\n"));
+
+    // Generate unified diff hunks
+    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+        output.push_str(&hunk.to_string());
+    }
+
+    if output.contains("@@") {
+        Some(output)
+    } else {
+        None
+    }
+}
+
 fn build_tool_item(
     item_id: &str,
     item_type: &str,
@@ -1355,7 +1386,11 @@ fn build_tool_item(
         if changes.is_empty() {
             if let Some(input) = raw_input {
                 if let Some(path) = file_path_from_raw_input(input) {
-                    changes.push(json!({ "path": path, "kind": "modify" }));
+                    let mut change = json!({ "path": path, "kind": "modify" });
+                    if let Some(diff) = generate_edit_diff(input, &path) {
+                        change["diff"] = json!(diff);
+                    }
+                    changes.push(change);
                 }
             }
         }
@@ -1496,6 +1531,46 @@ mod tests {
         assert_eq!(events[0]["method"], "item/completed");
         assert_eq!(events[0]["params"]["item"]["type"], "fileChange");
         assert_eq!(events[0]["params"]["item"]["status"], "completed");
+    }
+
+    #[test]
+    fn edit_tool_generates_unified_diff() {
+        let mut state = make_state();
+        let completed = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_edit_diff",
+                    "tool": "edit",
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "filePath": "src/main.rs",
+                            "oldString": "fn main() {\n    println!(\"Hello\");\n}",
+                            "newString": "fn main() {\n    println!(\"Hello, world!\");\n}"
+                        },
+                        "output": "File edited."
+                    }
+                }
+            }
+        });
+        let events = translate_sse_event(&completed, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/completed");
+        let item = &events[0]["params"]["item"];
+        assert_eq!(item["type"], "fileChange");
+
+        let changes = item["changes"].as_array().expect("changes should be array");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0]["path"], "src/main.rs");
+
+        let diff = changes[0]["diff"].as_str().expect("diff should be string");
+        assert!(diff.contains("--- a/src/main.rs"));
+        assert!(diff.contains("+++ b/src/main.rs"));
+        assert!(diff.contains("@@"));
+        assert!(diff.contains("-    println!(\"Hello\");"));
+        assert!(diff.contains("+    println!(\"Hello, world!\");"));
     }
 
     #[test]

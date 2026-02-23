@@ -69,6 +69,39 @@ fn should_include_hidden_sessions(sort_key: &Option<String>) -> bool {
         .unwrap_or(false)
 }
 
+fn replay_message_order_key(message: &Value) -> Option<String> {
+    let timestamp = message
+        .get("createdAt")
+        .or_else(|| message.get("created_at"))
+        .or_else(|| message.get("updatedAt"))
+        .or_else(|| message.get("updated_at"))
+        .or_else(|| message.get("time").and_then(|time| time.get("created")))
+        .or_else(|| message.get("time").and_then(|time| time.get("createdAt")))
+        .or_else(|| message.get("time").and_then(|time| time.get("created_at")))
+        .or_else(|| message.get("time").and_then(|time| time.get("updated")))
+        .or_else(|| message.get("time").and_then(|time| time.get("updatedAt")))
+        .or_else(|| message.get("time").and_then(|time| time.get("updated_at")))?;
+
+    if let Some(value) = timestamp.as_u64() {
+        return Some(format!("{value:020}"));
+    }
+    if let Some(value) = timestamp.as_i64() {
+        return Some(format!("{value:020}"));
+    }
+    timestamp
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn sort_replay_messages_chronologically(messages: &mut [Value]) {
+    messages.sort_by(|a, b| match (replay_message_order_key(a), replay_message_order_key(b)) {
+        (Some(a_key), Some(b_key)) => a_key.cmp(&b_key),
+        _ => std::cmp::Ordering::Equal,
+    });
+}
+
 async fn hidden_session_ids_for_workspace(
     workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
     workspace_id: &str,
@@ -136,7 +169,9 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
     let mut latest_assistant_info: Option<Value> = None;
 
     if let Some(msg_list) = messages.as_array() {
-        for msg_entry in msg_list {
+        let mut ordered_messages = msg_list.clone();
+        sort_replay_messages_chronologically(&mut ordered_messages);
+        for msg_entry in &ordered_messages {
             let role = msg_entry
                 .get("info")
                 .and_then(|i| i.get("role"))
@@ -1334,6 +1369,32 @@ mod tests {
             "updated_at".to_string()
         )));
         assert!(!should_include_hidden_sessions(&None));
+    }
+
+    #[test]
+    fn sort_replay_messages_orders_oldest_first_by_timestamp() {
+        let mut messages = vec![
+            json!({
+                "id": "msg-newer",
+                "time": { "created": 200 }
+            }),
+            json!({
+                "id": "msg-older",
+                "time": { "created": 100 }
+            }),
+            json!({
+                "id": "msg-middle",
+                "createdAt": 150
+            }),
+        ];
+
+        sort_replay_messages_chronologically(&mut messages);
+
+        let ids: Vec<String> = messages
+            .iter()
+            .filter_map(|msg| msg.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned))
+            .collect();
+        assert_eq!(ids, vec!["msg-older", "msg-middle", "msg-newer"]);
     }
 
     #[test]

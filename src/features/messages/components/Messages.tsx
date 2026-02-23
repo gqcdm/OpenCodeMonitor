@@ -208,27 +208,42 @@ export const Messages = memo(function Messages({
   );
 
   useEffect(() => {
+    const itemsToExpand: string[] = [];
     for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
       const item = visibleItems[index];
+      if (manuallyToggledExpandedRef.current.has(item.id)) {
+        continue;
+      }
       if (
         item.kind === "tool" &&
         item.toolType === "plan" &&
         (item.output ?? "").trim().length > 0
       ) {
-        if (manuallyToggledExpandedRef.current.has(item.id)) {
-          return;
-        }
-        setExpandedItems((prev) => {
-          if (prev.has(item.id)) {
-            return prev;
-          }
-          const next = new Set(prev);
-          next.add(item.id);
-          return next;
-        });
-        return;
+        itemsToExpand.push(item.id);
+        break;
+      }
+      if (
+        item.kind === "tool" &&
+        item.toolType === "fileChange" &&
+        item.changes?.some((change) => change.diff)
+      ) {
+        itemsToExpand.push(item.id);
       }
     }
+    if (itemsToExpand.length === 0) {
+      return;
+    }
+    setExpandedItems((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of itemsToExpand) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
   }, [visibleItems]);
 
   useEffect(() => {
