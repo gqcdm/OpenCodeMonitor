@@ -159,7 +159,9 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
                 .cloned()
                 .unwrap_or_default();
 
+            let mut text_fragments: Vec<String> = Vec::new();
             let mut content_parts: Vec<Value> = Vec::new();
+            let mut tool_parts: Vec<Value> = Vec::new();
 
             for part in &parts {
                 let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -167,28 +169,12 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
                     "text" => {
                         let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
                         if !text.is_empty() {
+                            text_fragments.push(text.to_string());
                             content_parts.push(json!({ "type": "text", "text": text }));
                         }
                     }
                     "tool" => {
-                        let tool_name = part
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let tool_state = part
-                            .get("state")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("completed");
-                        let tool_output = part
-                            .get("output")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        content_parts.push(json!({
-                            "type": "tool",
-                            "name": tool_name,
-                            "state": tool_state,
-                            "output": tool_output
-                        }));
+                        tool_parts.push(part.clone());
                     }
                     "file" => {
                         if let Some(url) = part.get("url").and_then(|v| v.as_str()) {
@@ -199,32 +185,107 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
                 }
             }
 
-            if content_parts.is_empty() {
-                continue;
+            if !content_parts.is_empty() {
+                replay_item_counter += 1;
+                let item_id = format!("replay_item_{replay_item_counter}");
+
+                if role == "user" {
+                    event_sink.emit_app_server_event(AppServerEvent {
+                        workspace_id: workspace_id.clone(),
+                        message: json!({
+                            "method": "item/completed",
+                            "params": {
+                                "threadId": thread_id,
+                                "item": {
+                                    "id": item_id,
+                                    "type": "userMessage",
+                                    "content": content_parts
+                                }
+                            }
+                        }),
+                    });
+                } else {
+                    // Frontend reads `item.text` via onAgentMessageCompleted path.
+                    let full_text = text_fragments.join("\n\n");
+                    event_sink.emit_app_server_event(AppServerEvent {
+                        workspace_id: workspace_id.clone(),
+                        message: json!({
+                            "method": "item/completed",
+                            "params": {
+                                "threadId": thread_id,
+                                "item": {
+                                    "id": item_id,
+                                    "type": "agentMessage",
+                                    "text": full_text,
+                                    "content": content_parts
+                                }
+                            }
+                        }),
+                    });
+                }
             }
 
-            replay_item_counter += 1;
-            let item_id = format!("replay_item_{replay_item_counter}");
-            let item_type = if role == "user" {
-                "userMessage"
-            } else {
-                "agentMessage"
-            };
+            for tool_part in &tool_parts {
+                replay_item_counter += 1;
+                let item_id = format!("replay_item_{replay_item_counter}");
 
-            event_sink.emit_app_server_event(AppServerEvent {
-                workspace_id: workspace_id.clone(),
-                message: json!({
-                    "method": "item/completed",
-                    "params": {
-                        "threadId": thread_id,
-                        "item": {
-                            "id": item_id,
-                            "type": item_type,
-                            "content": content_parts
+                let tool_name = tool_part
+                    .get("tool")
+                    .or_else(|| tool_part.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                let (status_str, raw_input, output_str) =
+                    if let Some(state_obj) = tool_part.get("state").filter(|v| v.is_object()) {
+                        let st = state_obj
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("completed");
+                        let inp = state_obj.get("input").cloned();
+                        let out = state_obj
+                            .get("output")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        (st, inp, out.to_string())
+                    } else {
+                        let st = tool_part
+                            .get("state")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("completed");
+                        let out = tool_part
+                            .get("output")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        (st, None, out.to_string())
+                    };
+
+                let item_type = replay_tool_kind_to_item_type(tool_name);
+                let final_status = match status_str {
+                    "error" => "failed",
+                    "completed" => "completed",
+                    _ => "completed",
+                };
+
+                let item = replay_build_tool_item(
+                    &item_id,
+                    item_type,
+                    tool_name,
+                    final_status,
+                    raw_input.as_ref(),
+                    &output_str,
+                );
+
+                event_sink.emit_app_server_event(AppServerEvent {
+                    workspace_id: workspace_id.clone(),
+                    message: json!({
+                        "method": "item/completed",
+                        "params": {
+                            "threadId": thread_id,
+                            "item": item
                         }
-                    }
-                }),
-            });
+                    }),
+                });
+            }
         }
     }
 
@@ -233,6 +294,84 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
             "thread": { "id": thread_id }
         }
     }))
+}
+
+fn replay_tool_kind_to_item_type(tool_name: &str) -> &str {
+    match tool_name {
+        "edit" | "write" | "create" => "fileChange",
+        "bash" | "command" | "terminal" => "commandExecution",
+        _ => "commandExecution",
+    }
+}
+
+fn replay_build_tool_item(
+    item_id: &str,
+    item_type: &str,
+    tool_name: &str,
+    status: &str,
+    raw_input: Option<&Value>,
+    output: &str,
+) -> Value {
+    let mut item = json!({
+        "id": item_id,
+        "type": item_type,
+        "status": status
+    });
+
+    if item_type == "commandExecution" {
+        let command = raw_input
+            .and_then(|inp| {
+                inp.get("command")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        inp.get("command")
+                            .and_then(|v| v.as_array())
+                            .map(|parts| {
+                                parts
+                                    .iter()
+                                    .filter_map(|v| v.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                    })
+            })
+            .unwrap_or_else(|| tool_name.to_string());
+        item["command"] = json!([command]);
+        if let Some(inp) = raw_input {
+            for key in &["workdir", "cwd", "path"] {
+                if let Some(cwd) = inp.get(key).and_then(|v| v.as_str()) {
+                    if !cwd.is_empty() {
+                        item["cwd"] = json!(cwd);
+                        break;
+                    }
+                }
+            }
+        }
+        if !output.trim().is_empty() {
+            item["aggregatedOutput"] = json!(output);
+        }
+    } else if item_type == "fileChange" {
+        let mut changes = Vec::new();
+        if let Some(inp) = raw_input {
+            for key in &["filePath", "path"] {
+                if let Some(path) = inp.get(key).and_then(|v| v.as_str()) {
+                    if !path.is_empty() {
+                        changes.push(json!({ "path": path, "kind": "modify" }));
+                        break;
+                    }
+                }
+            }
+        }
+        if !changes.is_empty() {
+            item["changes"] = json!(changes);
+        }
+        if !output.trim().is_empty() {
+            item["output"] = json!(output);
+        }
+    }
+
+    item
 }
 
 pub(crate) async fn fork_thread_core(

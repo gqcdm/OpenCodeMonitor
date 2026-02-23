@@ -142,6 +142,11 @@ pub(crate) fn translate_sse_event(
         "message.updated" => translate_message_updated(properties, state),
         "session.status" => translate_session_status(properties, state),
         "permission.updated" => translate_sse_permission(properties, state),
+        "server.heartbeat"
+        | "file.watcher.updated"
+        | "session.updated"
+        | "session.deleted"
+        | "config.updated" => vec![],
         _ => {
             #[cfg(debug_assertions)]
             eprintln!("[event_translator] unknown SSE event type: {event_type}");
