@@ -424,14 +424,24 @@ pub(crate) async fn list_threads_core(
                 .get("directory")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            Some(json!({
+            let parent_id = s
+                .get("parentID")
+                .or_else(|| s.get("parentId"))
+                .or_else(|| s.get("parent_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let mut entry = json!({
                 "id": id,
                 "cwd": directory,
                 "name": title,
                 "preview": title,
                 "updatedAt": updated_at,
                 "createdAt": updated_at
-            }))
+            });
+            if let Some(pid) = parent_id {
+                entry["parentId"] = json!(pid);
+            }
+            Some(entry)
         })
         .collect();
     Ok(json!({

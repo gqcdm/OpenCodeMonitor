@@ -476,8 +476,10 @@ export function useThreadActions({
             return;
           }
           const sourceParentId = getParentThreadIdFromSource(thread.source);
-          if (sourceParentId) {
-            updateThreadParent(sourceParentId, [threadId]);
+          const directParentId = asString(thread.parentId ?? thread.parent_id ?? "").trim() || null;
+          const resolvedParentId = sourceParentId ?? directParentId;
+          if (resolvedParentId) {
+            updateThreadParent(resolvedParentId, [threadId]);
           }
           const timestamp = getThreadTimestamp(thread);
           if (timestamp > (nextActivityByThread[threadId] ?? 0)) {
@@ -662,8 +664,10 @@ export function useThreadActions({
             return;
           }
           const sourceParentId = getParentThreadIdFromSource(thread.source);
-          if (sourceParentId) {
-            updateThreadParent(sourceParentId, [id]);
+          const directParentId = asString(thread.parentId ?? thread.parent_id ?? "").trim() || null;
+          const resolvedParentId = sourceParentId ?? directParentId;
+          if (resolvedParentId) {
+            updateThreadParent(resolvedParentId, [id]);
           }
           const preview = asString(thread?.preview ?? "").trim();
           const explicitName = asString(thread?.name ?? thread?.title ?? "").trim();
