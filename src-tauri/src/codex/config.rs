@@ -1,31 +1,29 @@
 use std::path::{Path, PathBuf};
 
-use toml::Value as TomlValue;
+use serde_json::Value as JsonValue;
 
 use crate::files::io::read_text_file_within;
 use crate::files::ops::write_with_policy;
-use crate::files::policy::{policy_for, FileKind, FileScope};
-
-const FEATURES_TABLE: &str = "[features]";
+use crate::files::policy::{policy_for_with_root, FileKind, FileScope};
 
 pub(crate) fn read_steer_enabled() -> Result<Option<bool>, String> {
-    read_feature_flag("steer")
+    read_json_bool_field("steer")
 }
 
 pub(crate) fn read_collab_enabled() -> Result<Option<bool>, String> {
-    read_feature_flag("collab")
+    read_json_bool_field("collab")
 }
 
 pub(crate) fn read_collaboration_modes_enabled() -> Result<Option<bool>, String> {
-    read_feature_flag("collaboration_modes")
+    read_json_bool_field("collaboration_modes")
 }
 
 pub(crate) fn read_unified_exec_enabled() -> Result<Option<bool>, String> {
-    read_feature_flag("unified_exec")
+    read_json_bool_field("unified_exec")
 }
 
 pub(crate) fn read_apps_enabled() -> Result<Option<bool>, String> {
-    read_feature_flag("apps")
+    read_json_bool_field("apps")
 }
 
 pub(crate) fn read_personality() -> Result<Option<String>, String> {
@@ -35,90 +33,92 @@ pub(crate) fn read_personality() -> Result<Option<String>, String> {
     let contents = read_config_contents_from_root(&root)?;
     Ok(contents
         .as_deref()
-        .and_then(parse_personality_from_toml)
+        .and_then(parse_personality_from_json)
         .map(|value| value.to_string()))
 }
 
 pub(crate) fn write_steer_enabled(enabled: bool) -> Result<(), String> {
-    write_feature_flag("steer", enabled)
+    write_json_bool_field("steer", enabled)
 }
 
 pub(crate) fn write_collab_enabled(enabled: bool) -> Result<(), String> {
-    write_feature_flag("collab", enabled)
+    write_json_bool_field("collab", enabled)
 }
 
 pub(crate) fn write_collaboration_modes_enabled(enabled: bool) -> Result<(), String> {
-    write_feature_flag("collaboration_modes", enabled)
+    write_json_bool_field("collaboration_modes", enabled)
 }
 
 pub(crate) fn write_unified_exec_enabled(enabled: bool) -> Result<(), String> {
-    write_feature_flag("unified_exec", enabled)
+    write_json_bool_field("unified_exec", enabled)
 }
 
 pub(crate) fn write_apps_enabled(enabled: bool) -> Result<(), String> {
-    write_feature_flag("apps", enabled)
+    write_json_bool_field("apps", enabled)
 }
 
 pub(crate) fn write_personality(personality: &str) -> Result<(), String> {
     let Some(root) = resolve_default_codex_home() else {
         return Ok(());
     };
-    let policy = config_policy()?;
+    let policy = config_policy(&root)?;
     let response = read_text_file_within(
         &root,
-        policy.filename,
+        &policy.filename,
         policy.root_may_be_missing,
         policy.root_context,
-        policy.filename,
+        &policy.filename,
         policy.allow_external_symlink_target,
     )?;
     let contents = if response.exists {
         response.content
     } else {
-        String::new()
+        String::from("{}")
     };
     let normalized = normalize_personality_value(personality);
     let updated = match normalized {
-        Some(value) => upsert_top_level_string_key(&contents, "personality", value),
-        None => remove_top_level_key(&contents, "personality"),
+        Some(value) => upsert_json_string_field(&contents, "personality", value)?,
+        None => remove_json_field(&contents, "personality")?,
     };
     write_with_policy(&root, policy, &updated)
 }
 
-fn read_feature_flag(key: &str) -> Result<Option<bool>, String> {
+fn read_json_bool_field(key: &str) -> Result<Option<bool>, String> {
     let Some(root) = resolve_default_codex_home() else {
         return Ok(None);
     };
     let contents = read_config_contents_from_root(&root)?;
     Ok(contents
         .as_deref()
-        .and_then(|value| find_feature_flag(value, key)))
+        .and_then(|c| parse_json_bool_field(c, key)))
 }
 
-fn write_feature_flag(key: &str, enabled: bool) -> Result<(), String> {
+fn write_json_bool_field(key: &str, enabled: bool) -> Result<(), String> {
     let Some(root) = resolve_default_codex_home() else {
         return Ok(());
     };
-    let policy = config_policy()?;
+    let policy = config_policy(&root)?;
     let response = read_text_file_within(
         &root,
-        policy.filename,
+        &policy.filename,
         policy.root_may_be_missing,
         policy.root_context,
-        policy.filename,
+        &policy.filename,
         policy.allow_external_symlink_target,
     )?;
     let contents = if response.exists {
         response.content
     } else {
-        String::new()
+        String::from("{}")
     };
-    let updated = upsert_feature_flag(&contents, key, enabled);
+    let updated = upsert_json_bool_field(&contents, key, enabled)?;
     write_with_policy(&root, policy, &updated)
 }
 
-pub(crate) fn config_toml_path() -> Option<PathBuf> {
-    resolve_default_codex_home().map(|home| home.join("config.toml"))
+pub(crate) fn config_json_path() -> Option<PathBuf> {
+    let root = resolve_default_codex_home()?;
+    let policy = config_policy(&root).ok()?;
+    Some(root.join(&policy.filename))
 }
 
 pub(crate) fn read_config_model(codex_home: Option<PathBuf>) -> Result<Option<String>, String> {
@@ -133,18 +133,18 @@ fn resolve_default_codex_home() -> Option<PathBuf> {
     crate::codex::home::resolve_default_codex_home()
 }
 
-fn config_policy() -> Result<crate::files::policy::FilePolicy, String> {
-    policy_for(FileScope::Global, FileKind::Config)
+fn config_policy(root: &Path) -> Result<crate::files::policy::FilePolicy, String> {
+    policy_for_with_root(FileScope::Global, FileKind::Config, Some(root))
 }
 
 fn read_config_contents_from_root(root: &Path) -> Result<Option<String>, String> {
-    let policy = config_policy()?;
+    let policy = config_policy(root)?;
     let response = read_text_file_within(
         root,
-        policy.filename,
+        &policy.filename,
         policy.root_may_be_missing,
         policy.root_context,
-        policy.filename,
+        &policy.filename,
         policy.allow_external_symlink_target,
     )?;
     if response.exists {
@@ -156,11 +156,11 @@ fn read_config_contents_from_root(root: &Path) -> Result<Option<String>, String>
 
 fn read_config_model_from_root(root: &Path) -> Result<Option<String>, String> {
     let contents = read_config_contents_from_root(root)?;
-    Ok(contents.as_deref().and_then(parse_model_from_toml))
+    Ok(contents.as_deref().and_then(parse_model_from_json))
 }
 
-fn parse_model_from_toml(contents: &str) -> Option<String> {
-    let parsed: TomlValue = toml::from_str(contents).ok()?;
+fn parse_model_from_json(contents: &str) -> Option<String> {
+    let parsed: JsonValue = strip_jsonc_comments_and_parse(contents).ok()?;
     let model = parsed.get("model")?.as_str()?;
     let trimmed = model.trim();
     if trimmed.is_empty() {
@@ -170,10 +170,15 @@ fn parse_model_from_toml(contents: &str) -> Option<String> {
     }
 }
 
-fn parse_personality_from_toml(contents: &str) -> Option<&'static str> {
-    let parsed: TomlValue = toml::from_str(contents).ok()?;
+fn parse_personality_from_json(contents: &str) -> Option<&'static str> {
+    let parsed: JsonValue = strip_jsonc_comments_and_parse(contents).ok()?;
     let value = parsed.get("personality")?.as_str()?;
     normalize_personality_value(value)
+}
+
+fn parse_json_bool_field(contents: &str, key: &str) -> Option<bool> {
+    let parsed: JsonValue = strip_jsonc_comments_and_parse(contents).ok()?;
+    parsed.get(key)?.as_bool()
 }
 
 fn normalize_personality_value(value: &str) -> Option<&'static str> {
@@ -184,206 +189,199 @@ fn normalize_personality_value(value: &str) -> Option<&'static str> {
     }
 }
 
-fn find_feature_flag(contents: &str, key: &str) -> Option<bool> {
-    let mut in_features = false;
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_features = trimmed == FEATURES_TABLE;
-            continue;
-        }
-        if !in_features || trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let (candidate_key, value) = trimmed.split_once('=')?;
-        if candidate_key.trim() != key {
-            continue;
-        }
-        let value = value.split('#').next().unwrap_or("").trim();
-        return match value {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        };
-    }
-    None
-}
+fn strip_jsonc_comments(contents: &str) -> String {
+    let mut result = String::with_capacity(contents.len());
+    let mut in_string = false;
+    let mut escape_next = false;
+    let mut chars = contents.chars().peekable();
 
-fn upsert_feature_flag(contents: &str, key: &str, enabled: bool) -> String {
-    let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
-    let mut in_features = false;
-    let mut features_start: Option<usize> = None;
-    let mut features_end: Option<usize> = None;
-    let mut key_index: Option<usize> = None;
+    while let Some(c) = chars.next() {
+        if escape_next {
+            result.push(c);
+            escape_next = false;
+            continue;
+        }
 
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if in_features {
-                features_end = Some(idx);
-                break;
-            }
-            in_features = trimmed == FEATURES_TABLE;
-            if in_features {
-                features_start = Some(idx);
-            }
+        if c == '\\' && in_string {
+            result.push(c);
+            escape_next = true;
             continue;
         }
-        if !in_features || trimmed.is_empty() || trimmed.starts_with('#') {
+
+        if c == '"' {
+            in_string = !in_string;
+            result.push(c);
             continue;
         }
-        if let Some((candidate_key, _)) = trimmed.split_once('=') {
-            if candidate_key.trim() == key {
-                key_index = Some(idx);
-                break;
+
+        if !in_string && c == '/' {
+            if chars.peek() == Some(&'/') {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    if next == '\n' {
+                        break;
+                    }
+                    chars.next();
+                }
+                continue;
+            } else if chars.peek() == Some(&'*') {
+                chars.next();
+                while let Some(next) = chars.next() {
+                    if next == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        break;
+                    }
+                }
+                continue;
             }
         }
+
+        result.push(c);
     }
 
-    let flag_line = format!("{key} = {}", if enabled { "true" } else { "false" });
-
-    if let Some(start) = features_start {
-        let end = features_end.unwrap_or(lines.len());
-        if let Some(index) = key_index {
-            lines[index] = flag_line;
-        } else {
-            let insert_at = if end > start + 1 { end } else { start + 1 };
-            lines.insert(insert_at, flag_line);
-        }
-    } else {
-        if !lines.is_empty() && !lines.last().unwrap().trim().is_empty() {
-            lines.push(String::new());
-        }
-        lines.push(FEATURES_TABLE.to_string());
-        lines.push(flag_line);
-    }
-
-    let mut updated = lines.join("\n");
-    if contents.ends_with('\n') || updated.is_empty() {
-        updated.push('\n');
-    }
-    updated
+    result
 }
 
-fn remove_top_level_key(contents: &str, key: &str) -> String {
-    let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
-    let table_start = first_table_start_index(&lines).unwrap_or(lines.len());
-    lines.retain_with_index(|idx, line| {
-        if idx >= table_start {
-            return true;
-        }
-        !is_key_value_for(line, key)
-    });
-
-    let mut updated = lines.join("\n");
-    if contents.ends_with('\n') || updated.is_empty() {
-        updated.push('\n');
-    }
-    updated
+fn strip_jsonc_comments_and_parse(contents: &str) -> Result<JsonValue, String> {
+    let stripped = strip_jsonc_comments(contents);
+    serde_json::from_str(&stripped).map_err(|e| format!("Failed to parse config JSON: {e}"))
 }
 
-fn upsert_top_level_string_key(contents: &str, key: &str, value: &str) -> String {
-    let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
-    let table_start = first_table_start_index(&lines).unwrap_or(lines.len());
-    let replacement = format!("{key} = \"{value}\"");
-    let mut replaced = false;
+fn upsert_json_bool_field(contents: &str, key: &str, value: bool) -> Result<String, String> {
+    let mut parsed: JsonValue = strip_jsonc_comments_and_parse(contents)?;
 
-    for line in lines.iter_mut().take(table_start) {
-        if is_key_value_for(line, key) {
-            *line = replacement.clone();
-            replaced = true;
-            break;
-        }
+    if let Some(obj) = parsed.as_object_mut() {
+        obj.insert(key.to_string(), JsonValue::Bool(value));
     }
 
-    if !replaced {
-        lines.insert(table_start, replacement);
-    }
-
-    let mut updated = lines.join("\n");
-    if contents.ends_with('\n') || updated.is_empty() {
-        updated.push('\n');
-    }
-    updated
+    serde_json::to_string_pretty(&parsed)
+        .map_err(|e| format!("Failed to serialize config JSON: {e}"))
 }
 
-fn is_key_value_for(line: &str, key: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
-        return false;
+fn upsert_json_string_field(contents: &str, key: &str, value: &str) -> Result<String, String> {
+    let mut parsed: JsonValue = strip_jsonc_comments_and_parse(contents)?;
+
+    if let Some(obj) = parsed.as_object_mut() {
+        obj.insert(key.to_string(), JsonValue::String(value.to_string()));
     }
-    let Some((candidate_key, _)) = trimmed.split_once('=') else {
-        return false;
-    };
-    candidate_key.trim() == key
+
+    serde_json::to_string_pretty(&parsed)
+        .map_err(|e| format!("Failed to serialize config JSON: {e}"))
 }
 
-fn first_table_start_index(lines: &[String]) -> Option<usize> {
-    lines.iter().position(|line| {
-        let trimmed = line.trim();
-        trimmed.starts_with('[') && trimmed.ends_with(']')
-    })
-}
+fn remove_json_field(contents: &str, key: &str) -> Result<String, String> {
+    let mut parsed: JsonValue = strip_jsonc_comments_and_parse(contents)?;
 
-trait RetainWithIndex<T> {
-    fn retain_with_index<F: FnMut(usize, &T) -> bool>(&mut self, f: F);
-}
-
-impl<T> RetainWithIndex<T> for Vec<T> {
-    fn retain_with_index<F: FnMut(usize, &T) -> bool>(&mut self, mut f: F) {
-        let mut index = 0usize;
-        self.retain(|item| {
-            let keep = f(index, item);
-            index += 1;
-            keep
-        });
+    if let Some(obj) = parsed.as_object_mut() {
+        obj.remove(key);
     }
+
+    serde_json::to_string_pretty(&parsed)
+        .map_err(|e| format!("Failed to serialize config JSON: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_personality_from_toml, remove_top_level_key, upsert_top_level_string_key};
+    use super::{
+        parse_json_bool_field, parse_model_from_json, parse_personality_from_json,
+        remove_json_field, strip_jsonc_comments, upsert_json_bool_field, upsert_json_string_field,
+    };
+
+    #[test]
+    fn strip_jsonc_comments_removes_line_comments() {
+        let input = r#"{
+            // This is a comment
+            "key": "value"
+        }"#;
+        let stripped = strip_jsonc_comments(input);
+        assert!(!stripped.contains("// This is a comment"));
+        assert!(stripped.contains("\"key\": \"value\""));
+    }
+
+    #[test]
+    fn strip_jsonc_comments_removes_block_comments() {
+        let input = r#"{
+            /* block comment */
+            "key": "value"
+        }"#;
+        let stripped = strip_jsonc_comments(input);
+        assert!(!stripped.contains("/* block comment */"));
+        assert!(stripped.contains("\"key\": \"value\""));
+    }
+
+    #[test]
+    fn strip_jsonc_comments_preserves_strings_with_slashes() {
+        let input = r#"{"url": "https://example.com"}"#;
+        let stripped = strip_jsonc_comments(input);
+        assert!(stripped.contains("https://example.com"));
+    }
 
     #[test]
     fn parse_personality_reads_supported_values() {
         assert_eq!(
-            parse_personality_from_toml("personality = \"friendly\"\n"),
+            parse_personality_from_json(r#"{"personality": "friendly"}"#),
             Some("friendly")
         );
         assert_eq!(
-            parse_personality_from_toml("personality = \"pragmatic\"\n"),
+            parse_personality_from_json(r#"{"personality": "pragmatic"}"#),
             Some("pragmatic")
         );
         assert_eq!(
-            parse_personality_from_toml("personality = \"unknown\"\n"),
+            parse_personality_from_json(r#"{"personality": "unknown"}"#),
             None
         );
     }
 
     #[test]
-    fn upsert_top_level_personality_before_tables() {
-        let input = "[features]\nsteer = true\n";
-        let updated = upsert_top_level_string_key(input, "personality", "friendly");
+    fn parse_model_reads_model_field() {
         assert_eq!(
-            updated,
-            "personality = \"friendly\"\n[features]\nsteer = true\n"
+            parse_model_from_json(r#"{"model": "claude-3-opus"}"#),
+            Some("claude-3-opus".to_string())
         );
+        assert_eq!(parse_model_from_json(r#"{"model": ""}"#), None);
+        assert_eq!(parse_model_from_json(r#"{}"#), None);
     }
 
     #[test]
-    fn upsert_replaces_existing_top_level_personality() {
-        let input = "personality = \"friendly\"\n[features]\nsteer = true\n";
-        let updated = upsert_top_level_string_key(input, "personality", "pragmatic");
+    fn parse_json_bool_field_works() {
         assert_eq!(
-            updated,
-            "personality = \"pragmatic\"\n[features]\nsteer = true\n"
+            parse_json_bool_field(r#"{"steer": true}"#, "steer"),
+            Some(true)
         );
+        assert_eq!(
+            parse_json_bool_field(r#"{"steer": false}"#, "steer"),
+            Some(false)
+        );
+        assert_eq!(parse_json_bool_field(r#"{}"#, "steer"), None);
     }
 
     #[test]
-    fn remove_top_level_personality_keeps_other_keys() {
-        let input = "personality = \"friendly\"\nmodel = \"gpt-5\"\n[features]\nsteer = true\n";
-        let updated = remove_top_level_key(input, "personality");
-        assert_eq!(updated, "model = \"gpt-5\"\n[features]\nsteer = true\n");
+    fn upsert_json_bool_field_adds_new_field() {
+        let input = r#"{}"#;
+        let updated = upsert_json_bool_field(input, "steer", true).unwrap();
+        assert!(updated.contains("\"steer\": true"));
+    }
+
+    #[test]
+    fn upsert_json_bool_field_updates_existing() {
+        let input = r#"{"steer": false}"#;
+        let updated = upsert_json_bool_field(input, "steer", true).unwrap();
+        assert!(updated.contains("\"steer\": true"));
+        assert!(!updated.contains("\"steer\": false"));
+    }
+
+    #[test]
+    fn upsert_json_string_field_works() {
+        let input = r#"{}"#;
+        let updated = upsert_json_string_field(input, "personality", "friendly").unwrap();
+        assert!(updated.contains("\"personality\": \"friendly\""));
+    }
+
+    #[test]
+    fn remove_json_field_works() {
+        let input = r#"{"personality": "friendly", "model": "test"}"#;
+        let updated = remove_json_field(input, "personality").unwrap();
+        assert!(!updated.contains("personality"));
+        assert!(updated.contains("\"model\": \"test\""));
     }
 }

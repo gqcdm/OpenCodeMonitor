@@ -297,21 +297,21 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create root");
         std::fs::create_dir_all(&outside).expect("create outside");
 
-        let outside_file = outside.join("config.toml");
-        std::fs::write(&outside_file, "name = \"outside\"").expect("seed outside file");
+        let outside_file = outside.join("opencode.jsonc");
+        std::fs::write(&outside_file, "{}").expect("seed outside file");
 
-        let link_path = root.join("config.toml");
+        let link_path = root.join("opencode.jsonc");
         symlink(&outside_file, &link_path).expect("create symlink");
 
         let error = read_text_file_within(
             &root,
-            "config.toml",
+            "opencode.jsonc",
             false,
-            "CODEX_HOME",
-            "config.toml",
+            "OPENCODE_HOME",
+            "opencode.jsonc",
             false,
         )
         .expect_err("should reject symlink escape");
-        assert!(error.contains("Invalid config.toml path"));
+        assert!(error.contains("Invalid opencode.jsonc path"));
     }
 }

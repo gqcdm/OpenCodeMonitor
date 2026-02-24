@@ -77,11 +77,11 @@ pub(crate) async fn update_remote_backend_token_core(
 }
 
 pub(crate) fn get_codex_config_path_core() -> Result<String, String> {
-    codex_config::config_toml_path()
-        .ok_or_else(|| "Unable to resolve CODEX_HOME".to_string())
+    codex_config::config_json_path()
+        .ok_or_else(|| "Unable to resolve OPENCODE_HOME".to_string())
         .and_then(|path| {
             path.to_str()
                 .map(|value| value.to_string())
-                .ok_or_else(|| "Unable to resolve CODEX_HOME".to_string())
+                .ok_or_else(|| "Unable to resolve OPENCODE_HOME".to_string())
         })
 }

@@ -128,13 +128,19 @@ export async function writeGlobalAgentsMd(content: string): Promise<void> {
   return fileWrite("global", "agents", content);
 }
 
-export async function readGlobalCodexConfigToml(): Promise<GlobalCodexConfigResponse> {
+export async function readGlobalOpenCodeConfig(): Promise<GlobalCodexConfigResponse> {
   return fileRead("global", "config");
 }
 
-export async function writeGlobalCodexConfigToml(content: string): Promise<void> {
+export async function writeGlobalOpenCodeConfig(content: string): Promise<void> {
   return fileWrite("global", "config", content);
 }
+
+/** @deprecated Use readGlobalOpenCodeConfig instead */
+export const readGlobalCodexConfigToml = readGlobalOpenCodeConfig;
+
+/** @deprecated Use writeGlobalOpenCodeConfig instead */
+export const writeGlobalCodexConfigToml = writeGlobalOpenCodeConfig;
 
 export async function getConfigModel(workspaceId: string): Promise<string | null> {
   const response = await invoke<{ model?: string | null }>("get_config_model", {

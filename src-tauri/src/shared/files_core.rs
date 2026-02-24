@@ -6,12 +6,12 @@ use tokio::sync::Mutex;
 use crate::codex::home as codex_home;
 use crate::files::io::TextFileResponse;
 use crate::files::ops::{read_with_policy, write_with_policy};
-use crate::files::policy::{policy_for, FileKind, FileScope};
+use crate::files::policy::{policy_for_with_root, FileKind, FileScope};
 use crate::types::WorkspaceEntry;
 
 fn resolve_default_codex_home() -> Result<PathBuf, String> {
     codex_home::resolve_default_codex_home()
-        .ok_or_else(|| "Unable to resolve CODEX_HOME".to_string())
+        .ok_or_else(|| "Unable to resolve OPENCODE_HOME".to_string())
 }
 
 async fn resolve_workspace_root(
@@ -45,8 +45,8 @@ pub(crate) async fn file_read_core(
     kind: FileKind,
     workspace_id: Option<String>,
 ) -> Result<TextFileResponse, String> {
-    let policy = policy_for(scope, kind)?;
     let root = resolve_root_core(workspaces, scope, workspace_id.as_deref()).await?;
+    let policy = policy_for_with_root(scope, kind, Some(&root))?;
     read_with_policy(&root, policy)
 }
 
@@ -57,7 +57,7 @@ pub(crate) async fn file_write_core(
     workspace_id: Option<String>,
     content: String,
 ) -> Result<(), String> {
-    let policy = policy_for(scope, kind)?;
     let root = resolve_root_core(workspaces, scope, workspace_id.as_deref()).await?;
+    let policy = policy_for_with_root(scope, kind, Some(&root))?;
     write_with_policy(&root, policy, &content)
 }

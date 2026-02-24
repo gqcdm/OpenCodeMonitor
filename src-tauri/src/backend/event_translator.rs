@@ -20,6 +20,8 @@ struct PerSessionTurnState {
     tool_call_items: HashMap<String, String>,
     /// Stable item ID for the current agent-message stream.
     agent_message_item_id: Option<String>,
+    /// OpenCode part ID for the current text part (used to handle part removals/reset).
+    agent_message_part_id: Option<String>,
     /// Stable item ID for the current reasoning stream.
     reasoning_item_id: Option<String>,
     /// OpenCode part ID for the current reasoning part (used to route `message.part.delta` events).
@@ -40,6 +42,9 @@ pub(crate) struct SessionTranslationState {
     session_turns: HashMap<String, PerSessionTurnState>,
     /// Counter for synthesizing unique item IDs (shared across all sessions).
     item_counter: AtomicU64,
+    /// Tracks OpenCode message roles by message ID to avoid routing user text
+    /// parts into assistant message deltas.
+    message_roles: HashMap<String, String>,
     /// Stable item ID for contiguous user-message chunk streams.
     pub(crate) user_message_item_id: Option<String>,
     /// Buffered text for contiguous user-message chunk streams.
@@ -54,6 +59,7 @@ impl SessionTranslationState {
             session_id,
             session_turns: HashMap::new(),
             item_counter: AtomicU64::new(1),
+            message_roles: HashMap::new(),
             user_message_item_id: None,
             user_message_text: String::new(),
             model_context_windows: HashMap::new(),
@@ -173,6 +179,23 @@ impl SessionTranslationState {
     fn reset_agent_message_item(&mut self, session_id: &str) {
         let turn_state = self.get_turn_state_mut(session_id);
         turn_state.agent_message_item_id = None;
+        turn_state.agent_message_part_id = None;
+    }
+
+    fn remove_part_mapping(&mut self, session_id: &str, part_id: &str) {
+        if part_id.is_empty() {
+            return;
+        }
+        let turn_state = self.get_turn_state_mut(session_id);
+        turn_state.tool_call_items.remove(part_id);
+        if turn_state.reasoning_part_id.as_deref() == Some(part_id) {
+            turn_state.reasoning_part_id = None;
+            turn_state.reasoning_item_id = None;
+        }
+        if turn_state.agent_message_part_id.as_deref() == Some(part_id) {
+            turn_state.agent_message_part_id = None;
+            turn_state.agent_message_item_id = None;
+        }
     }
 
     fn finish_turn(&mut self, session_id: &str) {
@@ -180,6 +203,7 @@ impl SessionTranslationState {
             turn_state.turn_id.clear();
             turn_state.tool_call_items.clear();
             turn_state.agent_message_item_id = None;
+            turn_state.agent_message_part_id = None;
             turn_state.reasoning_item_id = None;
             turn_state.reasoning_part_id = None;
         }
@@ -201,9 +225,27 @@ impl SessionTranslationState {
         if let Some(turn_state) = self.session_turns.get_mut(&self.session_id) {
             turn_state.tool_call_items.clear();
             turn_state.agent_message_item_id = None;
+            turn_state.agent_message_part_id = None;
             turn_state.reasoning_item_id = None;
             turn_state.reasoning_part_id = None;
         }
+    }
+
+    fn remember_message_role(&mut self, message_id: &str, role: &str) {
+        let message_id = message_id.trim();
+        let role = role.trim();
+        if message_id.is_empty() || role.is_empty() {
+            return;
+        }
+        self.message_roles
+            .insert(message_id.to_string(), role.to_string());
+    }
+
+    fn is_user_message_id(&self, message_id: &str) -> bool {
+        self.message_roles
+            .get(message_id.trim())
+            .map(|role| role == "user")
+            .unwrap_or(false)
     }
 }
 
@@ -290,6 +332,7 @@ pub(crate) fn translate_sse_event(
 
     match event_type {
         "message.part.updated" => translate_part_updated(properties, state),
+        "message.part.removed" => translate_part_removed(properties, state),
         "message.part.delta" => translate_part_delta(properties, state),
         "message.updated" => translate_message_updated(properties, state),
         "session.created" => translate_session_created_or_updated(properties, state, true),
@@ -441,6 +484,11 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
         .unwrap_or_default();
 
     let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let part_message_id = part
+        .get("messageID")
+        .or_else(|| part.get("messageId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
 
     if let Some(sid) = part.get("sessionID").and_then(|v| v.as_str()) {
         if !sid.is_empty() {
@@ -453,9 +501,50 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
         .map(|ts| ts.turn_id.clone())
         .unwrap_or_default();
 
+    let emit_reasoning_summary = |state: &mut SessionTranslationState, text: &str| {
+        let summary = text.trim();
+        if summary.is_empty() {
+            return vec![];
+        }
+        let item_id = state.reasoning_item(&thread_id);
+        vec![
+            json!({
+                "method": "item/reasoning/summaryPartAdded",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "itemId": item_id
+                }
+            }),
+            json!({
+                "method": "item/reasoning/summaryTextDelta",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "itemId": item_id,
+                    "delta": summary
+                }
+            }),
+        ]
+    };
+
     match part_type {
         "text" => {
-            if delta.is_empty() {
+            if state.is_user_message_id(part_message_id) {
+                return vec![];
+            }
+            if let Some(pid) = part.get("id").and_then(|v| v.as_str()) {
+                let turn_state = state.get_turn_state_mut(&thread_id);
+                turn_state.agent_message_part_id = Some(pid.to_string());
+            }
+            let effective_delta = if delta.is_empty() {
+                part.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+            } else {
+                delta
+            };
+            if effective_delta.is_empty() {
                 return vec![];
             }
 
@@ -466,17 +555,27 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
                     "threadId": thread_id,
                     "turnId": turn_id,
                     "itemId": item_id,
-                    "delta": delta
+                    "delta": effective_delta
                 }
             })]
         }
 
         "reasoning" => {
+            if state.is_user_message_id(part_message_id) {
+                return vec![];
+            }
             if let Some(pid) = part.get("id").and_then(|v| v.as_str()) {
                 let turn_state = state.get_turn_state_mut(&thread_id);
                 turn_state.reasoning_part_id = Some(pid.to_string());
             }
-            if delta.is_empty() {
+            let effective_delta = if delta.is_empty() {
+                part.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+            } else {
+                delta
+            };
+            if effective_delta.is_empty() {
                 return vec![];
             }
             let item_id = state.reasoning_item(&thread_id);
@@ -486,15 +585,62 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
                     "threadId": thread_id,
                     "turnId": turn_id,
                     "itemId": item_id,
-                    "delta": delta
+                    "delta": effective_delta
                 }
             })]
+        }
+
+        "step-start" => vec![],
+        "step-finish" => vec![],
+
+        "subtask" => {
+            let description = part
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let prompt = part
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let label = if description.trim().is_empty() {
+                prompt
+            } else {
+                description
+            };
+            emit_reasoning_summary(state, label)
+        }
+
+        "agent" => {
+            let name = part
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            emit_reasoning_summary(state, name)
         }
 
         "tool" => translate_tool_part(part, state, &thread_id),
 
         _ => vec![],
     }
+}
+
+// ---------------------------------------------------------------------------
+// message.part.removed — part reset/removal (used by OpenCode reset/revert flows)
+// ---------------------------------------------------------------------------
+
+fn translate_part_removed(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+    if let Some(sid) = properties.get("sessionID").and_then(|v| v.as_str()) {
+        if !sid.is_empty() {
+            state.session_id = sid.to_string();
+        }
+    }
+    let thread_id = state.session_id.clone();
+    let part_id = properties
+        .get("partID")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    state.remove_part_mapping(&thread_id, part_id);
+    vec![]
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +663,11 @@ fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState)
         .get("field")
         .and_then(|v| v.as_str())
         .unwrap_or("text");
+    let message_id = properties
+        .get("messageID")
+        .or_else(|| properties.get("messageId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     let thread_id = state.session_id.clone();
     let turn_id = state
         .get_turn_state(&thread_id)
@@ -525,6 +676,9 @@ fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState)
 
     match field {
         "text" => {
+            if state.is_user_message_id(message_id) {
+                return vec![];
+            }
             let part_id = properties
                 .get("partID")
                 .and_then(|v| v.as_str())
@@ -826,6 +980,12 @@ fn translate_message_updated(
     }
 
     let thread_id = state.session_id.clone();
+
+    if let Some(message_id) = info.get("id").and_then(|v| v.as_str()) {
+        if let Some(role) = info.get("role").and_then(|v| v.as_str()) {
+            state.remember_message_role(message_id, role);
+        }
+    }
 
     let model = info.get("model");
     let provider_id = info
@@ -1967,6 +2127,68 @@ mod tests {
     }
 
     #[test]
+    fn user_text_part_updated_does_not_produce_agent_message_delta() {
+        let mut state = make_state();
+
+        let message_updated = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "id": "msg_user_1",
+                    "sessionID": "ses_test123",
+                    "role": "user"
+                }
+            }
+        });
+        let _ = translate_sse_event(&message_updated, &mut state);
+
+        let part_updated = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "prt_user_text_1",
+                    "sessionID": "ses_test123",
+                    "messageID": "msg_user_1",
+                    "text": "User prompt text"
+                }
+            }
+        });
+        let events = translate_sse_event(&part_updated, &mut state);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn user_text_part_delta_does_not_produce_agent_message_delta() {
+        let mut state = make_state();
+
+        let message_updated = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "id": "msg_user_1",
+                    "sessionID": "ses_test123",
+                    "role": "user"
+                }
+            }
+        });
+        let _ = translate_sse_event(&message_updated, &mut state);
+
+        let part_delta = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_user_1",
+                "partID": "prt_user_text_1",
+                "field": "text",
+                "delta": "User prompt text"
+            }
+        });
+        let events = translate_sse_event(&part_delta, &mut state);
+        assert!(events.is_empty());
+    }
+
+    #[test]
     fn part_delta_routes_reasoning_by_part_id() {
         let mut state = make_state();
 
@@ -1998,6 +2220,201 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "item/reasoning/textDelta");
         assert_eq!(events[0]["params"]["delta"], "thinking...");
+    }
+
+    #[test]
+    fn part_removed_resets_reasoning_mapping_for_next_part() {
+        let mut state = make_state();
+
+        let reasoning_announce_1 = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "reasoning",
+                    "id": "prt_reasoning_1",
+                    "sessionID": "ses_test123",
+                    "text": ""
+                }
+            }
+        });
+        translate_sse_event(&reasoning_announce_1, &mut state);
+
+        let first_delta = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "partID": "prt_reasoning_1",
+                "field": "text",
+                "delta": "thinking..."
+            }
+        });
+        let first_events = translate_sse_event(&first_delta, &mut state);
+        let first_item_id = first_events[0]["params"]["itemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let removed = json!({
+            "type": "message.part.removed",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_1",
+                "partID": "prt_reasoning_1"
+            }
+        });
+        let removed_events = translate_sse_event(&removed, &mut state);
+        assert!(removed_events.is_empty());
+
+        let reasoning_announce_2 = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "reasoning",
+                    "id": "prt_reasoning_2",
+                    "sessionID": "ses_test123",
+                    "text": ""
+                }
+            }
+        });
+        translate_sse_event(&reasoning_announce_2, &mut state);
+
+        let second_delta = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "partID": "prt_reasoning_2",
+                "field": "text",
+                "delta": "rethinking..."
+            }
+        });
+        let second_events = translate_sse_event(&second_delta, &mut state);
+        let second_item_id = second_events[0]["params"]["itemId"].as_str().unwrap();
+        assert_eq!(second_events[0]["method"], "item/reasoning/textDelta");
+        assert_ne!(second_item_id, first_item_id);
+    }
+
+    #[test]
+    fn part_removed_resets_text_mapping_for_next_part() {
+        let mut state = make_state();
+
+        let text_part_1 = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "prt_text_1",
+                    "sessionID": "ses_test123"
+                },
+                "delta": "hello"
+            }
+        });
+        let first_events = translate_sse_event(&text_part_1, &mut state);
+        let first_item_id = first_events[0]["params"]["itemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let removed = json!({
+            "type": "message.part.removed",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_1",
+                "partID": "prt_text_1"
+            }
+        });
+        let removed_events = translate_sse_event(&removed, &mut state);
+        assert!(removed_events.is_empty());
+
+        let text_part_2 = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "prt_text_2",
+                    "sessionID": "ses_test123"
+                },
+                "delta": "hi again"
+            }
+        });
+        let second_events = translate_sse_event(&text_part_2, &mut state);
+        let second_item_id = second_events[0]["params"]["itemId"].as_str().unwrap();
+        assert_eq!(second_events[0]["method"], "item/agentMessage/delta");
+        assert_ne!(second_item_id, first_item_id);
+    }
+
+    #[test]
+    fn subtask_part_produces_reasoning_summary_events() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "subtask",
+                    "id": "prt_subtask_1",
+                    "sessionID": "ses_test123",
+                    "messageID": "msg_1",
+                    "prompt": "Investigate SQLite fallback and verify build",
+                    "description": "Designing SQLite usage fallback",
+                    "agent": "code",
+                }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["method"], "item/reasoning/summaryPartAdded");
+        assert_eq!(events[1]["method"], "item/reasoning/summaryTextDelta");
+        assert_eq!(
+            events[1]["params"]["delta"],
+            "Designing SQLite usage fallback"
+        );
+    }
+
+    #[test]
+    fn agent_part_produces_reasoning_summary_events() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "agent",
+                    "id": "prt_agent_1",
+                    "sessionID": "ses_test123",
+                    "messageID": "msg_1",
+                    "name": "Verifying type inference and build errors"
+                }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["method"], "item/reasoning/summaryPartAdded");
+        assert_eq!(events[1]["method"], "item/reasoning/summaryTextDelta");
+        assert_eq!(
+            events[1]["params"]["delta"],
+            "Verifying type inference and build errors"
+        );
+    }
+
+    #[test]
+    fn reasoning_part_updated_uses_part_text_when_delta_missing() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "reasoning",
+                    "id": "prt_reasoning_full",
+                    "sessionID": "ses_test123",
+                    "text": "Thinking through edge cases"
+                }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/reasoning/textDelta");
+        assert_eq!(events[0]["params"]["delta"], "Thinking through edge cases");
     }
 
     #[test]

@@ -583,11 +583,11 @@ export function SettingsCodexSection({
       />
 
       <FileEditorCard
-        title="Global config.toml"
+        title="Global opencode.json"
         meta={globalConfigMeta}
         error={globalConfigError}
         value={globalConfigContent}
-        placeholder="Edit the global OpenCode config.toml…"
+        placeholder="Edit the global OpenCode config…"
         disabled={globalConfigLoading}
         refreshDisabled={globalConfigRefreshDisabled}
         saveDisabled={globalConfigSaveDisabled}
@@ -597,7 +597,8 @@ export function SettingsCodexSection({
         onSave={onSaveGlobalConfig}
         helpText={
           <>
-            Stored at <code>~/.config/opencode/config.toml</code>.
+            Stored at <code>~/.config/opencode/opencode.json</code> or{" "}
+            <code>opencode.jsonc</code>.
           </>
         }
         classNames={{

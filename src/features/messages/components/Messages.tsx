@@ -202,7 +202,7 @@ export const Messages = memo(function Messages({
         if (item.kind !== "reasoning") {
           return true;
         }
-        return reasoningMetaById.get(item.id)?.hasBody ?? false;
+        return Boolean(reasoningMetaById.get(item.id)?.workingLabel);
       }),
     [items, reasoningMetaById],
   );

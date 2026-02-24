@@ -9,7 +9,7 @@ import type {
   WorkspaceInfo,
 } from "@/types";
 import { useGlobalAgentsMd } from "./useGlobalAgentsMd";
-import { useGlobalCodexConfigToml } from "./useGlobalCodexConfigToml";
+import { useGlobalOpenCodeConfig } from "./useGlobalCodexConfigToml";
 import { useSettingsDefaultModels } from "./useSettingsDefaultModels";
 import {
   buildEditorContentMeta,
@@ -157,7 +157,7 @@ export const useSettingsCodexSection = ({
     setContent: setGlobalConfigContent,
     refresh: refreshGlobalConfig,
     save: saveGlobalConfig,
-  } = useGlobalCodexConfigToml();
+  } = useGlobalOpenCodeConfig();
 
   const globalAgentsEditorMeta = buildEditorContentMeta({
     isLoading: globalAgentsLoading,

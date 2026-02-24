@@ -114,7 +114,7 @@ export function SettingsNav({
           showDisclosure={showDisclosure}
           onClick={() => onSelectSection("codex")}
         >
-          Codex
+          OpenCode
         </PanelNavItem>
         {/* Features tab hidden - no current options relevant to OpenCode
         <PanelNavItem

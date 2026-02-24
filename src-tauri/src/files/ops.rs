@@ -9,10 +9,10 @@ pub(crate) fn read_with_policy(
 ) -> Result<TextFileResponse, String> {
     read_text_file_within(
         root,
-        policy.filename,
+        &policy.filename,
         policy.root_may_be_missing,
         policy.root_context,
-        policy.filename,
+        &policy.filename,
         policy.allow_external_symlink_target,
     )
 }
@@ -24,11 +24,11 @@ pub(crate) fn write_with_policy(
 ) -> Result<(), String> {
     write_text_file_within(
         root,
-        policy.filename,
+        &policy.filename,
         content,
         policy.create_root,
         policy.root_context,
-        policy.filename,
+        &policy.filename,
         policy.allow_external_symlink_target,
     )
 }
@@ -57,7 +57,7 @@ mod tests {
         fs::create_dir_all(&root).expect("create workspace root");
         let policy = policy_for(FileScope::Workspace, FileKind::Agents).expect("policy");
 
-        write_with_policy(&root, policy, "workspace agents").expect("write agents");
+        write_with_policy(&root, policy.clone(), "workspace agents").expect("write agents");
         let response = read_with_policy(&root, policy).expect("read agents");
 
         assert!(response.exists);
@@ -81,10 +81,10 @@ mod tests {
         let root = temp_dir("global-agents");
         let policy = policy_for(FileScope::Global, FileKind::Agents).expect("policy");
 
-        let initial = read_with_policy(&root, policy).expect("initial read");
+        let initial = read_with_policy(&root, policy.clone()).expect("initial read");
         assert!(!initial.exists);
 
-        write_with_policy(&root, policy, "global agents").expect("write agents");
+        write_with_policy(&root, policy.clone(), "global agents").expect("write agents");
         let response = read_with_policy(&root, policy).expect("read agents");
 
         assert!(response.exists);
@@ -99,11 +99,11 @@ mod tests {
         let root = temp_dir("global-config");
         let policy = policy_for(FileScope::Global, FileKind::Config).expect("policy");
 
-        write_with_policy(&root, policy, "[model]\nname = \"test\"\n").expect("write config");
+        write_with_policy(&root, policy.clone(), r#"{"model": "test"}"#).expect("write config");
         let response = read_with_policy(&root, policy).expect("read config");
 
         assert!(response.exists);
-        assert!(response.content.contains("name = \"test\""));
+        assert!(response.content.contains("\"model\": \"test\""));
         assert!(!response.truncated);
 
         let _ = fs::remove_dir_all(&root);

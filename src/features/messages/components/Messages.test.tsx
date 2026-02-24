@@ -335,7 +335,7 @@ describe("Messages", () => {
     expect(useFileLinkOpenerMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses reasoning title for the working indicator and hides title-only reasoning rows", () => {
+  it("renders title-only reasoning rows and uses reasoning title for the working indicator", () => {
     const items: ConversationItem[] = [
       {
         id: "reasoning-1",
@@ -359,7 +359,7 @@ describe("Messages", () => {
 
     const workingText = container.querySelector(".working-text");
     expect(workingText?.textContent ?? "").toContain("Scanning repository");
-    expect(container.querySelector(".reasoning-inline")).toBeNull();
+    expect(container.querySelector(".reasoning-inline")).toBeTruthy();
   });
 
   it("renders reasoning rows when there is reasoning body content", () => {
@@ -453,7 +453,7 @@ describe("Messages", () => {
     expect(workingText?.textContent ?? "").not.toContain("Old reasoning title");
   });
 
-  it("keeps the latest title-only reasoning label without rendering a reasoning row", () => {
+  it("keeps the latest title-only reasoning label while rendering a reasoning row", () => {
     const items: ConversationItem[] = [
       {
         id: "reasoning-title-only",
@@ -486,7 +486,7 @@ describe("Messages", () => {
 
     const workingText = container.querySelector(".working-text");
     expect(workingText?.textContent ?? "").toContain("Indexing workspace");
-    expect(container.querySelector(".reasoning-inline")).toBeNull();
+    expect(container.querySelector(".reasoning-inline")).toBeTruthy();
   });
 
   it("merges consecutive explore items under a single explored block", async () => {
