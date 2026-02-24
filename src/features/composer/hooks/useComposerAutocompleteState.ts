@@ -8,10 +8,8 @@ import type {
 } from "../../../types";
 import { connectorMentionSlug } from "../../apps/utils/appMentions";
 import {
-  buildPromptInsertText,
   findNextPromptArgCursor,
   findPromptArgRangeAtCursor,
-  getPromptArgumentHint,
 } from "../../../utils/customPrompts";
 import { isComposingEvent } from "../../../utils/keys";
 
@@ -147,7 +145,7 @@ export function useComposerAutocompleteState({
   slashCommands = [],
   skills,
   apps,
-  prompts,
+  prompts: _prompts,
   files,
   textareaRef,
   setText,
@@ -198,25 +196,6 @@ export function useComposerAutocompleteState({
     [fileTriggerActive, files, selectionStart, text],
   );
 
-  const promptItems = useMemo<AutocompleteItem[]>(
-    () =>
-      prompts
-        .filter((prompt) => prompt.name)
-        .map((prompt) => {
-          const insert = buildPromptInsertText(prompt);
-          return {
-            id: `prompt:${prompt.name}`,
-            label: `prompts:${prompt.name}`,
-            description: prompt.description,
-            hint: getPromptArgumentHint(prompt),
-            insertText: insert.text,
-            cursorOffset: insert.cursorOffset,
-            group: "Prompts" as const,
-          };
-        }),
-    [prompts],
-  );
-
   const slashCommandItems = useMemo<AutocompleteItem[]>(() => {
     const seen = new Set<string>();
     const items: AutocompleteItem[] = [];
@@ -231,6 +210,9 @@ export function useComposerAutocompleteState({
     }
 
     for (const command of slashCommands) {
+      if ((command.source ?? "").trim().toLowerCase() === "skill") {
+        continue;
+      }
       const label = command.name.trim();
       if (!label) {
         continue;
@@ -253,8 +235,8 @@ export function useComposerAutocompleteState({
   }, [appsEnabled, slashCommands]);
 
   const slashItems = useMemo<AutocompleteItem[]>(
-    () => [...slashCommandItems, ...promptItems],
-    [promptItems, slashCommandItems],
+    () => slashCommandItems,
+    [slashCommandItems],
   );
 
   const triggers = useMemo(
