@@ -180,5 +180,6 @@ Use extra care in high-churn/high-complexity files:
 - Setup/build/release/test commands: `README.md`
 - Architecture decision (ACP to REST migration): `docs/shaping/rest-api-migration.md`
 - Frontend event contract: `docs/app-server-events.md`
+- For OpenCode API/feature changes, refer to `opencode-server-api.mdx` and `./tmp/opencode` before implementing protocol or behavior updates.
 
 ##

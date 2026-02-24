@@ -259,6 +259,18 @@ fn collaboration_mode_entry_from_agent(agent: &Value) -> Option<Value> {
         return None;
     }
 
+    let agent_mode = agent
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(mode) = agent_mode {
+        // Collaboration mode picker should only show primary-capable agents.
+        if mode != "primary" && mode != "all" {
+            return None;
+        }
+    }
+
     let hidden = agent
         .get("hidden")
         .and_then(|v| v.as_bool())
@@ -2000,20 +2012,36 @@ mod tests {
     }
 
     #[test]
-    fn collaboration_mode_entry_from_agent_includes_subagent_and_skips_hidden() {
+    fn collaboration_mode_entry_from_agent_keeps_primary_capable_and_skips_subagent_hidden() {
         let subagent = collaboration_mode_entry_from_agent(&json!({
             "name": "explore",
             "mode": "subagent",
             "hidden": false,
             "description": "Explore-only agent"
+        }));
+        assert!(subagent.is_none());
+
+        let primary = collaboration_mode_entry_from_agent(&json!({
+            "name": "build",
+            "mode": "primary",
+            "hidden": false,
+            "description": "Primary agent"
         }))
-        .expect("subagent should be included");
-        assert_eq!(subagent["mode"], "explore");
-        assert_eq!(subagent["label"], "Explore");
+        .expect("primary agent should be included");
+        assert_eq!(primary["mode"], "build");
+        assert_eq!(primary["label"], "Build");
+
+        let dual_role = collaboration_mode_entry_from_agent(&json!({
+            "name": "general",
+            "mode": "all",
+            "hidden": false
+        }))
+        .expect("all-mode agent should be included");
+        assert_eq!(dual_role["mode"], "general");
 
         let hidden = collaboration_mode_entry_from_agent(&json!({
             "name": "summary",
-            "mode": "subagent",
+            "mode": "primary",
             "hidden": true
         }));
         assert!(hidden.is_none());

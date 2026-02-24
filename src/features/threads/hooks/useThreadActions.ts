@@ -489,6 +489,12 @@ export function useThreadActions({
           }
         });
         const uniqueThreads = Array.from(uniqueById.values());
+        const previousOrderIndex = new Map(
+          (threadsByWorkspace[workspace.id] ?? []).map((thread, index) => [
+            thread.id,
+            index,
+          ]),
+        );
         const activityByThread = threadActivityRef.current[workspace.id] ?? {};
         const nextActivityByThread = { ...activityByThread };
         let didChangeActivity = false;
@@ -525,7 +531,22 @@ export function useThreadActions({
         };
         if (requestedSortKey === "updated_at") {
           uniqueThreads.sort((a, b) => {
-            return getEffectiveTimestamp(b) - getEffectiveTimestamp(a);
+            const updatedDelta = getEffectiveTimestamp(b) - getEffectiveTimestamp(a);
+            if (updatedDelta !== 0) {
+              return updatedDelta;
+            }
+            const aId = String(a?.id ?? "");
+            const bId = String(b?.id ?? "");
+            const aPrev = previousOrderIndex.get(aId);
+            const bPrev = previousOrderIndex.get(bId);
+            if (aPrev !== undefined && bPrev !== undefined && aPrev !== bPrev) {
+              return aPrev - bPrev;
+            }
+            const createdDelta = getThreadCreatedTimestamp(b) - getThreadCreatedTimestamp(a);
+            if (createdDelta !== 0) {
+              return createdDelta;
+            }
+            return aId.localeCompare(bId);
           });
         } else {
           uniqueThreads.sort((a, b) => {
@@ -610,6 +631,7 @@ export function useThreadActions({
       dispatch,
       getCustomName,
       onDebug,
+      threadsByWorkspace,
       threadActivityRef,
       threadSortKey,
       updateThreadParent,

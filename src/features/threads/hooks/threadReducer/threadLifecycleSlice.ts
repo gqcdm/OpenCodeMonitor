@@ -4,6 +4,25 @@ import { prefersUpdatedSort } from "./common";
 
 type ThreadStatus = ThreadState["threadStatusById"][string];
 
+function sortThreadsByUpdatedAtDesc(threads: ThreadSummary[]): ThreadSummary[] {
+  const originalIndexById = new Map(
+    threads.map((thread, index) => [thread.id, index] as const),
+  );
+  return [...threads].sort((a, b) => {
+    const aUpdated = a.updatedAt ?? 0;
+    const bUpdated = b.updatedAt ?? 0;
+    if (bUpdated !== aUpdated) {
+      return bUpdated - aUpdated;
+    }
+    const aIndex = originalIndexById.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+    const bIndex = originalIndexById.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+    if (aIndex !== bIndex) {
+      return aIndex - bIndex;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
+
 function statusEquals(previous: ThreadStatus, nextStatus: ThreadStatus) {
   return (
     previous.isProcessing === nextStatus.isProcessing &&
@@ -296,10 +315,7 @@ export function reduceThreadLifecycle(
         return state;
       }
       const sorted = prefersUpdatedSort(state, action.workspaceId)
-        ? [
-            ...next.filter((thread) => thread.id === action.threadId),
-            ...next.filter((thread) => thread.id !== action.threadId),
-          ]
+        ? sortThreadsByUpdatedAtDesc(next)
         : next;
       return {
         ...state,

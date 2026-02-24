@@ -198,6 +198,32 @@ describe("threadReducer", () => {
     ]);
   });
 
+  it("keeps updated_at ordering correct when a thread timestamp increases but remains older", () => {
+    const threads: ThreadSummary[] = [
+      { id: "thread-1", name: "Agent 1", updatedAt: 2000 },
+      { id: "thread-2", name: "Agent 2", updatedAt: 1000 },
+      { id: "thread-3", name: "Agent 3", updatedAt: 900 },
+    ];
+    const next = threadReducer(
+      {
+        ...initialState,
+        threadsByWorkspace: { "ws-1": threads },
+        threadSortKeyByWorkspace: { "ws-1": "updated_at" },
+      },
+      {
+        type: "setThreadTimestamp",
+        workspaceId: "ws-1",
+        threadId: "thread-3",
+        timestamp: 1500,
+      },
+    );
+    expect(next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id)).toEqual([
+      "thread-1",
+      "thread-3",
+      "thread-2",
+    ]);
+  });
+
   it("keeps ordering stable on timestamp updates when sorted by created_at", () => {
     const threads: ThreadSummary[] = [
       { id: "thread-1", name: "Agent 1", updatedAt: 1000 },

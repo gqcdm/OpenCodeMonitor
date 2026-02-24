@@ -22,10 +22,14 @@ struct PerSessionTurnState {
     agent_message_item_id: Option<String>,
     /// OpenCode part ID for the current text part (used to handle part removals/reset).
     agent_message_part_id: Option<String>,
+    /// Number of bytes already emitted for the current agent text part.
+    agent_message_text_len: usize,
     /// Stable item ID for the current reasoning stream.
     reasoning_item_id: Option<String>,
     /// OpenCode part ID for the current reasoning part (used to route `message.part.delta` events).
     reasoning_part_id: Option<String>,
+    /// Number of bytes already emitted for the current reasoning part.
+    reasoning_text_len: usize,
     /// Stable item ID for the current user-message being assembled from SSE chunks.
     user_message_item_id: Option<String>,
     /// Buffered text for the current user-message being assembled from SSE chunks.
@@ -126,8 +130,10 @@ impl SessionTranslationState {
         turn_state.tool_call_items.clear();
         turn_state.agent_message_item_id = None;
         turn_state.agent_message_part_id = None;
+        turn_state.agent_message_text_len = 0;
         turn_state.reasoning_item_id = None;
         turn_state.reasoning_part_id = None;
+        turn_state.reasoning_text_len = 0;
         turn_state.user_message_item_id = preserved_user_message_item_id;
         turn_state.user_message_text = preserved_user_message_text;
     }
@@ -141,6 +147,9 @@ impl SessionTranslationState {
             turn_state.agent_message_item_id = None;
             turn_state.reasoning_item_id = None;
             turn_state.reasoning_part_id = None;
+            turn_state.reasoning_text_len = 0;
+            turn_state.agent_message_part_id = None;
+            turn_state.agent_message_text_len = 0;
             // Preserve user_message_item_id so replay reuses the same ID
             // the live SSE translator already emitted (prevents duplicates).
             turn_state.user_message_text.clear();
@@ -185,6 +194,7 @@ impl SessionTranslationState {
         let turn_state = self.get_turn_state_mut(session_id);
         turn_state.agent_message_item_id = None;
         turn_state.agent_message_part_id = None;
+        turn_state.agent_message_text_len = 0;
     }
 
     fn remove_part_mapping(&mut self, session_id: &str, part_id: &str) {
@@ -196,10 +206,12 @@ impl SessionTranslationState {
         if turn_state.reasoning_part_id.as_deref() == Some(part_id) {
             turn_state.reasoning_part_id = None;
             turn_state.reasoning_item_id = None;
+            turn_state.reasoning_text_len = 0;
         }
         if turn_state.agent_message_part_id.as_deref() == Some(part_id) {
             turn_state.agent_message_part_id = None;
             turn_state.agent_message_item_id = None;
+            turn_state.agent_message_text_len = 0;
         }
     }
 
@@ -209,8 +221,10 @@ impl SessionTranslationState {
             turn_state.tool_call_items.clear();
             turn_state.agent_message_item_id = None;
             turn_state.agent_message_part_id = None;
+            turn_state.agent_message_text_len = 0;
             turn_state.reasoning_item_id = None;
             turn_state.reasoning_part_id = None;
+            turn_state.reasoning_text_len = 0;
             turn_state.user_message_item_id = None;
             turn_state.user_message_text.clear();
         }
@@ -233,8 +247,10 @@ impl SessionTranslationState {
             turn_state.tool_call_items.clear();
             turn_state.agent_message_item_id = None;
             turn_state.agent_message_part_id = None;
+            turn_state.agent_message_text_len = 0;
             turn_state.reasoning_item_id = None;
             turn_state.reasoning_part_id = None;
+            turn_state.reasoning_text_len = 0;
         }
     }
 
@@ -254,6 +270,19 @@ impl SessionTranslationState {
             .map(|role| role == "user")
             .unwrap_or(false)
     }
+}
+
+fn unseen_suffix<'a>(full_text: &'a str, emitted_len: usize) -> Option<&'a str> {
+    if full_text.is_empty() {
+        return None;
+    }
+    if emitted_len == 0 {
+        return Some(full_text);
+    }
+    if full_text.len() <= emitted_len {
+        return None;
+    }
+    full_text.get(emitted_len..).filter(|suffix| !suffix.is_empty())
 }
 
 fn parse_u64(value: Option<&Value>) -> Option<u64> {
@@ -542,10 +571,20 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
                 // Emit a userMessage item so the prompt is visible immediately
                 // (particularly important for subagent sessions whose prompts
                 // aren't injected by send_user_message_core).
+                let effective_text_owned;
                 let effective_text = if delta.is_empty() {
-                    part.get("text")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
+                    let full_text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                    let current_user_text = state
+                        .get_turn_state(&thread_id)
+                        .map(|ts| ts.user_message_text.clone())
+                        .unwrap_or_default();
+                    if full_text.starts_with(current_user_text.as_str()) {
+                        let suffix = &full_text[current_user_text.len()..];
+                        effective_text_owned = suffix.to_string();
+                        effective_text_owned.as_str()
+                    } else {
+                        full_text
+                    }
                 } else {
                     delta
                 };
@@ -575,17 +614,36 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
             }
             if let Some(pid) = part.get("id").and_then(|v| v.as_str()) {
                 let turn_state = state.get_turn_state_mut(&thread_id);
-                turn_state.agent_message_part_id = Some(pid.to_string());
+                if turn_state.agent_message_part_id.as_deref() != Some(pid) {
+                    turn_state.agent_message_part_id = Some(pid.to_string());
+                    turn_state.agent_message_text_len = 0;
+                }
             }
             let effective_delta = if delta.is_empty() {
-                part.get("text")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
+                let full_text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                let emitted_len = state
+                    .get_turn_state(&thread_id)
+                    .map(|ts| ts.agent_message_text_len)
+                    .unwrap_or(0);
+                match unseen_suffix(full_text, emitted_len) {
+                    Some(suffix) => suffix,
+                    None => return vec![],
+                }
             } else {
                 delta
             };
             if effective_delta.is_empty() {
                 return vec![];
+            }
+            if delta.is_empty() {
+                let full_len = part
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(effective_delta.len());
+                state.get_turn_state_mut(&thread_id).agent_message_text_len = full_len;
+            } else {
+                state.get_turn_state_mut(&thread_id).agent_message_text_len += effective_delta.len();
             }
 
             let item_id = state.agent_message_item(&thread_id);
@@ -606,17 +664,36 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
             }
             if let Some(pid) = part.get("id").and_then(|v| v.as_str()) {
                 let turn_state = state.get_turn_state_mut(&thread_id);
-                turn_state.reasoning_part_id = Some(pid.to_string());
+                if turn_state.reasoning_part_id.as_deref() != Some(pid) {
+                    turn_state.reasoning_part_id = Some(pid.to_string());
+                    turn_state.reasoning_text_len = 0;
+                }
             }
             let effective_delta = if delta.is_empty() {
-                part.get("text")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
+                let full_text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                let emitted_len = state
+                    .get_turn_state(&thread_id)
+                    .map(|ts| ts.reasoning_text_len)
+                    .unwrap_or(0);
+                match unseen_suffix(full_text, emitted_len) {
+                    Some(suffix) => suffix,
+                    None => return vec![],
+                }
             } else {
                 delta
             };
             if effective_delta.is_empty() {
                 return vec![];
+            }
+            if delta.is_empty() {
+                let full_len = part
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(effective_delta.len());
+                state.get_turn_state_mut(&thread_id).reasoning_text_len = full_len;
+            } else {
+                state.get_turn_state_mut(&thread_id).reasoning_text_len += effective_delta.len();
             }
             let item_id = state.reasoning_item(&thread_id);
             vec![json!({
@@ -751,6 +828,7 @@ fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState)
 
             if is_reasoning {
                 let item_id = state.reasoning_item(&thread_id);
+                state.get_turn_state_mut(&thread_id).reasoning_text_len += delta.len();
                 return vec![json!({
                     "method": "item/reasoning/textDelta",
                     "params": {
@@ -763,6 +841,7 @@ fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState)
             }
 
             let item_id = state.agent_message_item(&thread_id);
+            state.get_turn_state_mut(&thread_id).agent_message_text_len += delta.len();
             vec![json!({
                 "method": "item/agentMessage/delta",
                 "params": {
@@ -2427,6 +2506,62 @@ mod tests {
         assert_eq!(events[0]["method"], "item/agentMessage/delta");
         assert_eq!(events[0]["params"]["threadId"], "ses_test123");
         assert_eq!(events[0]["params"]["delta"], "hello");
+    }
+
+    #[test]
+    fn text_part_updated_uses_only_unseen_suffix_after_streamed_deltas() {
+        let mut state = make_state();
+
+        let delta1 = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_1",
+                "partID": "prt_text_1",
+                "field": "text",
+                "delta": "I'm currently in Plan Mode (read-only), "
+            }
+        });
+        let events1 = translate_sse_event(&delta1, &mut state);
+        assert_eq!(events1.len(), 1);
+        assert_eq!(events1[0]["params"]["delta"], "I'm currently in Plan Mode (read-only), ");
+
+        let delta2 = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_1",
+                "partID": "prt_text_1",
+                "field": "text",
+                "delta": "so I can't make any file edits right now."
+            }
+        });
+        let events2 = translate_sse_event(&delta2, &mut state);
+        assert_eq!(events2.len(), 1);
+        assert_eq!(
+            events2[0]["params"]["delta"],
+            "so I can't make any file edits right now."
+        );
+
+        let updated = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "prt_text_1",
+                    "sessionID": "ses_test123",
+                    "messageID": "msg_1",
+                    "text": "I'm currently in Plan Mode (read-only), so I can't make any file edits right now.\n\nTo make edits, switch out of Plan Mode first."
+                }
+            }
+        });
+        let events3 = translate_sse_event(&updated, &mut state);
+        assert_eq!(events3.len(), 1);
+        assert_eq!(events3[0]["method"], "item/agentMessage/delta");
+        assert_eq!(
+            events3[0]["params"]["delta"],
+            "\n\nTo make edits, switch out of Plan Mode first."
+        );
     }
 
     #[test]

@@ -627,6 +627,61 @@ describe("useThreadActions", () => {
     });
   });
 
+  it("keeps updated_at ordering stable across refreshes when timestamps tie", async () => {
+    vi.mocked(listThreads).mockResolvedValue({
+      result: {
+        data: [
+          {
+            id: "thread-a",
+            cwd: "/tmp/codex",
+            preview: "Alpha",
+            updated_at: 5000,
+            created_at: 1000,
+          },
+          {
+            id: "thread-b",
+            cwd: "/tmp/codex",
+            preview: "Beta",
+            updated_at: 5000,
+            created_at: 1000,
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    vi.mocked(getThreadTimestamp).mockImplementation((thread) => {
+      const value = (thread as Record<string, unknown>).updated_at as number;
+      return value ?? 0;
+    });
+    vi.mocked(getThreadCreatedTimestamp).mockImplementation((thread) => {
+      const value = (thread as Record<string, unknown>).created_at as number;
+      return value ?? 0;
+    });
+
+    const { result, dispatch } = renderActions({
+      threadsByWorkspace: {
+        "ws-1": [
+          { id: "thread-b", name: "Beta", updatedAt: 5000 },
+          { id: "thread-a", name: "Alpha", updatedAt: 5000 },
+        ],
+      },
+    });
+
+    await act(async () => {
+      await result.current.listThreadsForWorkspace(workspace);
+    });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "setThreads",
+      workspaceId: "ws-1",
+      sortKey: "updated_at",
+      threads: [
+        { id: "thread-b", name: "Beta", updatedAt: 5000 },
+        { id: "thread-a", name: "Alpha", updatedAt: 5000 },
+      ],
+    });
+  });
+
   it("restores parent-child links from thread/list source metadata", async () => {
     vi.mocked(listThreads).mockResolvedValue({
       result: {
