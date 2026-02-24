@@ -16,6 +16,7 @@ use crate::codex::config as codex_config;
 use crate::codex::home::{resolve_default_codex_home, resolve_workspace_codex_home};
 use crate::rules;
 use crate::shared::account::{build_account_response, read_auth_account};
+use crate::shared::diff_utils::generate_edit_diff;
 use crate::types::WorkspaceEntry;
 
 pub(crate) enum CodexLoginCancelState {
@@ -656,7 +657,12 @@ fn replay_build_tool_item(
             for key in &["filePath", "path"] {
                 if let Some(path) = inp.get(key).and_then(|v| v.as_str()) {
                     if !path.is_empty() {
-                        changes.push(json!({ "path": path, "kind": "modify" }));
+                        let mut change = json!({ "path": path, "kind": "modify" });
+                        // Generate diff from oldString/newString if available
+                        if let Some(diff) = generate_edit_diff(inp, path) {
+                            change["diff"] = json!(diff);
+                        }
+                        changes.push(change);
                         break;
                     }
                 }

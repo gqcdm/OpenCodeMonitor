@@ -7,9 +7,10 @@
 //! OpenCode ↔ CodexMonitor translation happens here in Rust.
 
 use serde_json::{json, Value};
-use similar::TextDiff;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::shared::diff_utils::generate_edit_diff;
 
 /// Per-session turn state — tracks active turn and item IDs for a single session.
 #[derive(Default)]
@@ -282,7 +283,9 @@ fn unseen_suffix<'a>(full_text: &'a str, emitted_len: usize) -> Option<&'a str> 
     if full_text.len() <= emitted_len {
         return None;
     }
-    full_text.get(emitted_len..).filter(|suffix| !suffix.is_empty())
+    full_text
+        .get(emitted_len..)
+        .filter(|suffix| !suffix.is_empty())
 }
 
 fn parse_u64(value: Option<&Value>) -> Option<u64> {
@@ -573,7 +576,10 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
                 // aren't injected by send_user_message_core).
                 let effective_text_owned;
                 let effective_text = if delta.is_empty() {
-                    let full_text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                    let full_text = part
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
                     let current_user_text = state
                         .get_turn_state(&thread_id)
                         .map(|ts| ts.user_message_text.clone())
@@ -620,7 +626,10 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
                 }
             }
             let effective_delta = if delta.is_empty() {
-                let full_text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                let full_text = part
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 let emitted_len = state
                     .get_turn_state(&thread_id)
                     .map(|ts| ts.agent_message_text_len)
@@ -643,7 +652,8 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
                     .unwrap_or(effective_delta.len());
                 state.get_turn_state_mut(&thread_id).agent_message_text_len = full_len;
             } else {
-                state.get_turn_state_mut(&thread_id).agent_message_text_len += effective_delta.len();
+                state.get_turn_state_mut(&thread_id).agent_message_text_len +=
+                    effective_delta.len();
             }
 
             let item_id = state.agent_message_item(&thread_id);
@@ -670,7 +680,10 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
                 }
             }
             let effective_delta = if delta.is_empty() {
-                let full_text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                let full_text = part
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 let emitted_len = state
                     .get_turn_state(&thread_id)
                     .map(|ts| ts.reasoning_text_len)
@@ -1612,10 +1625,7 @@ fn translate_question_completed(properties: &Value) -> Vec<Value> {
 
 /// Translate an OpenCode `todo.updated` SSE event into a `turn/plan/updated`
 /// event so the PlanPanel sidebar reflects the current session todo list.
-fn translate_todo_updated(
-    properties: &Value,
-    state: &mut SessionTranslationState,
-) -> Vec<Value> {
+fn translate_todo_updated(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
     let session_id = properties
         .get("sessionID")
         .or_else(|| properties.get("sessionId"))
@@ -1848,36 +1858,6 @@ fn file_path_from_raw_input(raw_input: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-/// Generate a unified diff from oldString/newString edit input.
-/// Returns a unified diff string with @@ hunk headers that the frontend can render.
-fn generate_edit_diff(raw_input: &Value, file_path: &str) -> Option<String> {
-    let old_string = raw_input.get("oldString").and_then(|v| v.as_str())?;
-    let new_string = raw_input.get("newString").and_then(|v| v.as_str())?;
-
-    // Don't generate diff for empty old/new (pure create or delete)
-    if old_string.is_empty() && new_string.is_empty() {
-        return None;
-    }
-
-    let diff = TextDiff::from_lines(old_string, new_string);
-    let mut output = String::new();
-
-    // Add file header
-    output.push_str(&format!("--- a/{file_path}\n"));
-    output.push_str(&format!("+++ b/{file_path}\n"));
-
-    // Generate unified diff hunks
-    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
-        output.push_str(&hunk.to_string());
-    }
-
-    if output.contains("@@") {
-        Some(output)
-    } else {
-        None
-    }
 }
 
 fn build_tool_item(
@@ -2524,7 +2504,10 @@ mod tests {
         });
         let events1 = translate_sse_event(&delta1, &mut state);
         assert_eq!(events1.len(), 1);
-        assert_eq!(events1[0]["params"]["delta"], "I'm currently in Plan Mode (read-only), ");
+        assert_eq!(
+            events1[0]["params"]["delta"],
+            "I'm currently in Plan Mode (read-only), "
+        );
 
         let delta2 = json!({
             "type": "message.part.delta",
