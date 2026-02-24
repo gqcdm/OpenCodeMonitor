@@ -8,6 +8,7 @@ import type {
   ModelOption,
   WorkspaceInfo,
 } from "@/types";
+import type { OpenCodeServerStatus } from "@services/tauri";
 import { FileEditorCard } from "@/features/shared/components/FileEditorCard";
 import { groupModelsByProvider } from "@/features/models/utils/groupModelsByProvider";
 
@@ -19,6 +20,13 @@ type SettingsCodexSectionProps = {
   defaultModelsError: string | null;
   defaultModelsConnectedWorkspaceCount: number;
   onRefreshDefaultModels: () => void;
+  opencodeServerStatus: OpenCodeServerStatus | null;
+  opencodeServerStatusLoading: boolean;
+  opencodeServerStatusError: string | null;
+  opencodeServerStatusLastCheckedAt: number | null;
+  opencodeServerRestarting: boolean;
+  onRefreshOpenCodeServerStatus: () => void;
+  onRestartOpenCodeServer: () => void;
   codexPathDraft: string;
   codexArgsDraft: string;
   codexDirty: boolean;
@@ -86,17 +94,20 @@ const normalizeEffortValue = (value: unknown): string | null => {
   return trimmed.length > 0 ? trimmed.toLowerCase() : null;
 };
 
-function coerceSavedModelSlug(value: string | null, models: ModelOption[]): string | null {
+function coerceSavedModelId(value: string | null, models: ModelOption[]): string | null {
   const trimmed = (value ?? "").trim();
   if (!trimmed) {
     return null;
   }
-  const bySlug = models.find((model) => model.model === trimmed);
-  if (bySlug) {
-    return bySlug.model;
-  }
   const byId = models.find((model) => model.id === trimmed);
-  return byId ? byId.model : null;
+  if (byId) {
+    return byId.id;
+  }
+  const bySlug = models.filter((model) => model.model === trimmed);
+  if (bySlug.length === 0) {
+    return null;
+  }
+  return (bySlug.find((model) => model.isDefault) ?? bySlug[0])?.id ?? null;
 }
 
 const getReasoningSupport = (model: ModelOption | null): boolean => {
@@ -128,6 +139,13 @@ export function SettingsCodexSection({
   defaultModelsError,
   defaultModelsConnectedWorkspaceCount,
   onRefreshDefaultModels,
+  opencodeServerStatus,
+  opencodeServerStatusLoading,
+  opencodeServerStatusError,
+  opencodeServerStatusLastCheckedAt,
+  opencodeServerRestarting,
+  onRefreshOpenCodeServerStatus,
+  onRestartOpenCodeServer,
   codexPathDraft,
   codexArgsDraft,
   codexDirty,
@@ -171,15 +189,15 @@ export function SettingsCodexSection({
   onUpdateWorkspaceSettings,
 }: SettingsCodexSectionProps) {
   const groupedDefaultModels = useMemo(() => groupModelsByProvider(defaultModels), [defaultModels]);
-  const latestModelSlug = defaultModels[0]?.model ?? null;
-  const savedModelSlug = useMemo(
-    () => coerceSavedModelSlug(appSettings.lastComposerModelId, defaultModels),
+  const latestModelId = defaultModels[0]?.id ?? null;
+  const savedModelId = useMemo(
+    () => coerceSavedModelId(appSettings.lastComposerModelId, defaultModels),
     [appSettings.lastComposerModelId, defaultModels],
   );
-  const selectedModelSlug = savedModelSlug ?? latestModelSlug ?? "";
+  const selectedModelId = savedModelId ?? latestModelId ?? "";
   const selectedModel = useMemo(
-    () => defaultModels.find((model) => model.model === selectedModelSlug) ?? null,
-    [defaultModels, selectedModelSlug],
+    () => defaultModels.find((model) => model.id === selectedModelId) ?? null,
+    [defaultModels, selectedModelId],
   );
   const reasoningSupported = useMemo(
     () => getReasoningSupport(selectedModel),
@@ -220,7 +238,7 @@ export function SettingsCodexSection({
     }
     const savedRawModel = (appSettings.lastComposerModelId ?? "").trim();
     const savedRawEffort = (appSettings.lastComposerReasoningEffort ?? "").trim();
-    const shouldNormalizeModel = savedRawModel.length === 0 || savedModelSlug === null;
+    const shouldNormalizeModel = savedRawModel.length === 0 || savedModelId === null;
     const shouldNormalizeEffort =
       reasoningSupported &&
       (savedRawEffort.length === 0 ||
@@ -233,7 +251,7 @@ export function SettingsCodexSection({
 
     const next: AppSettings = {
       ...appSettings,
-      lastComposerModelId: shouldNormalizeModel ? selectedModelSlug : appSettings.lastComposerModelId,
+      lastComposerModelId: shouldNormalizeModel ? selectedModelId : appSettings.lastComposerModelId,
       lastComposerReasoningEffort: shouldNormalizeEffort
         ? selectedEffort
         : appSettings.lastComposerReasoningEffort,
@@ -247,8 +265,8 @@ export function SettingsCodexSection({
     reasoningOptions,
     reasoningSupported,
     savedEffort,
-    savedModelSlug,
-    selectedModelSlug,
+    savedModelId,
+    selectedModelId,
     selectedEffort,
   ]);
 
@@ -311,6 +329,29 @@ export function SettingsCodexSection({
         <div className="settings-help">
           Extra flags passed before <code>acp</code>. Use quotes for values with spaces.
         </div>
+        <div className="settings-help">
+          OpenCode server:{" "}
+          <code>{opencodeServerStatus?.baseUrl ?? "http://127.0.0.1:14096"}</code>{" "}
+          {opencodeServerStatusLoading
+            ? "(checking...)"
+            : opencodeServerStatus
+              ? opencodeServerStatus.healthy
+                ? `(${opencodeServerStatus.source}, healthy${
+                    opencodeServerStatus.version ? `, v${opencodeServerStatus.version}` : ""
+                  })`
+                : `(${opencodeServerStatus.source}, unavailable)`
+              : "(unknown)"}
+        </div>
+        {opencodeServerStatusLastCheckedAt && !opencodeServerStatusLoading && (
+          <div className="settings-help">
+            Last checked: {new Date(opencodeServerStatusLastCheckedAt).toLocaleTimeString()}
+          </div>
+        )}
+        {opencodeServerStatusError && (
+          <div className="settings-help" style={{ color: "var(--color-danger, #d55)" }}>
+            Server status error: {opencodeServerStatusError}
+          </div>
+        )}
         <div className="settings-field-actions">
           {codexDirty && (
             <button
@@ -346,6 +387,24 @@ export function SettingsCodexSection({
           >
             <Stethoscope aria-hidden />
             {codexUpdateState.status === "running" ? "Updating..." : "Update"}
+          </button>
+          <button
+            type="button"
+            className="ghost settings-button-compact"
+            onClick={onRefreshOpenCodeServerStatus}
+            disabled={opencodeServerStatusLoading || opencodeServerRestarting}
+            title="Refresh OpenCode server status"
+          >
+            {opencodeServerStatusLoading ? "Checking..." : "Server status"}
+          </button>
+          <button
+            type="button"
+            className="ghost settings-button-compact"
+            onClick={onRestartOpenCodeServer}
+            disabled={opencodeServerRestarting}
+            title="Restart the OpenCode server used by OpenCode Monitor"
+          >
+            {opencodeServerRestarting ? "Restarting..." : "Restart server"}
           </button>
         </div>
 
@@ -417,20 +476,24 @@ export function SettingsCodexSection({
             Model
           </label>
           <div className="settings-toggle-subtitle">
-            {defaultModelsConnectedWorkspaceCount === 0
-              ? "Connect a project to load available models."
-              : defaultModelsLoading
-                ? "Loading models…"
-                : defaultModelsError
-                  ? `Couldn’t load models: ${defaultModelsError}`
-                  : "Used when there is no thread-specific override."}
+            {defaultModelsLoading
+              ? "Loading models from configured OpenCode providers…"
+              : defaultModelsError
+                ? `Couldn’t load models from OpenCode providers: ${defaultModelsError}`
+                : `Loaded from configured OpenCode providers${
+                    defaultModelsConnectedWorkspaceCount > 0
+                      ? ` (${defaultModelsConnectedWorkspaceCount} connected project${
+                          defaultModelsConnectedWorkspaceCount === 1 ? "" : "s"
+                        })`
+                      : ""
+                  }. Used when there is no thread-specific override.`}
           </div>
         </div>
         <div className="settings-field-row">
           <select
             id="default-model"
             className="settings-select"
-            value={selectedModelSlug}
+            value={selectedModelId}
             disabled={!defaultModels.length || defaultModelsLoading}
             onChange={(event) =>
               void onUpdateAppSettings({
@@ -444,14 +507,14 @@ export function SettingsCodexSection({
               group.label ? (
                 <optgroup key={group.provider} label={group.label}>
                   {group.models.map((model) => (
-                    <option key={model.model} value={model.model}>
+                    <option key={model.id} value={model.id}>
                       {model.displayName?.trim() || model.model}
                     </option>
                   ))}
                 </optgroup>
               ) : (
                 group.models.map((model) => (
-                  <option key={model.model} value={model.model}>
+                  <option key={model.id} value={model.id}>
                     {model.displayName?.trim() || model.model}
                   </option>
                 ))
@@ -462,7 +525,7 @@ export function SettingsCodexSection({
             type="button"
             className="ghost"
             onClick={onRefreshDefaultModels}
-            disabled={defaultModelsLoading || defaultModelsConnectedWorkspaceCount === 0}
+            disabled={defaultModelsLoading}
           >
             Refresh
           </button>
@@ -502,31 +565,6 @@ export function SettingsCodexSection({
         </select>
       </div>
 
-      <div className="settings-toggle-row">
-        <div>
-          <label className="settings-toggle-title" htmlFor="default-access">
-            Access mode
-          </label>
-          <div className="settings-toggle-subtitle">
-            Used when there is no thread-specific override.
-          </div>
-        </div>
-        <select
-          id="default-access"
-          className="settings-select"
-          value={appSettings.defaultAccessMode}
-          onChange={(event) =>
-            void onUpdateAppSettings({
-              ...appSettings,
-              defaultAccessMode: event.target.value as AppSettings["defaultAccessMode"],
-            })
-          }
-        >
-          <option value="read-only">Read only</option>
-          <option value="current">On-request</option>
-          <option value="full-access">Full access</option>
-        </select>
-      </div>
       <div className="settings-field">
         <label className="settings-field-label" htmlFor="review-delivery">
           Review mode

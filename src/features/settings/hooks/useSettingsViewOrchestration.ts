@@ -26,6 +26,7 @@ import {
 } from "@settings/components/settingsViewConstants";
 
 type UseSettingsViewOrchestrationArgs = {
+  activeWorkspaceId?: string | null;
   workspaceGroups: WorkspaceGroup[];
   groupedWorkspaces: GroupedWorkspaces;
   ungroupedLabel: string;
@@ -70,6 +71,7 @@ type UseSettingsViewOrchestrationArgs = {
 };
 
 export function useSettingsViewOrchestration({
+  activeWorkspaceId,
   workspaceGroups,
   groupedWorkspaces,
   ungroupedLabel,
@@ -198,6 +200,7 @@ export function useSettingsViewOrchestration({
   const codexSectionProps = useSettingsCodexSection({
     appSettings,
     projects,
+    activeWorkspaceId,
     onUpdateAppSettings,
     onRunDoctor,
     onRunCodexUpdate,

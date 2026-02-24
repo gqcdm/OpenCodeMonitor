@@ -2326,6 +2326,7 @@ function MainApp() {
         onCloseSettings={closeSettings}
         SettingsViewComponent={SettingsView}
         settingsProps={{
+          activeWorkspaceId,
           workspaceGroups,
           groupedWorkspaces,
           ungroupedLabel,

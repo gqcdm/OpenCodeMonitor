@@ -2,14 +2,14 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@/types";
-import { getModelList } from "@services/tauri";
+import { getSettingsModelList } from "@services/tauri";
 import { useSettingsDefaultModels } from "./useSettingsDefaultModels";
 
 vi.mock("@services/tauri", () => ({
-  getModelList: vi.fn(),
+  getSettingsModelList: vi.fn(),
 }));
 
-const getModelListMock = vi.mocked(getModelList);
+const getSettingsModelListMock = vi.mocked(getSettingsModelList);
 
 function workspace(id: string, connected = true): WorkspaceInfo {
   return {
@@ -54,45 +54,29 @@ describe("useSettingsDefaultModels", () => {
     vi.clearAllMocks();
   });
 
-  it("invalidates in-flight results when connected workspaces drop to zero", async () => {
-    const pending = deferred<any>();
-    getModelListMock.mockReturnValueOnce(pending.promise);
+  it("loads configured provider models even with no connected workspaces", async () => {
+    getSettingsModelListMock.mockResolvedValueOnce(modelListResponse("gpt-5"));
 
-    const { result, rerender } = renderHook(
+    const { result } = renderHook(
       ({ projects }: { projects: WorkspaceInfo[] }) => useSettingsDefaultModels(projects),
       {
         initialProps: {
-          projects: [workspace("w1", true)],
+          projects: [workspace("w1", false)],
         },
       },
     );
 
     await waitFor(() => {
-      expect(result.current.isLoading).toBe(true);
-      expect(result.current.connectedWorkspaceCount).toBe(1);
-    });
-
-    rerender({ projects: [workspace("w1", false)] });
-
-    await waitFor(() => {
-      expect(result.current.models).toEqual([]);
-      expect(result.current.isLoading).toBe(false);
+      expect(getSettingsModelListMock).toHaveBeenCalledTimes(1);
+      expect(result.current.models[0]?.model).toBe("gpt-5");
       expect(result.current.connectedWorkspaceCount).toBe(0);
     });
-
-    await act(async () => {
-      pending.resolve(modelListResponse("gpt-5"));
-      await Promise.resolve();
-    });
-
-    expect(result.current.models).toEqual([]);
-    expect(result.current.connectedWorkspaceCount).toBe(0);
   });
 
-  it("ignores stale results when the connected workspace set changes", async () => {
+  it("ignores stale results when project connectivity metadata changes", async () => {
     const first = deferred<any>();
     const second = deferred<any>();
-    getModelListMock
+    getSettingsModelListMock
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
 
@@ -106,13 +90,14 @@ describe("useSettingsDefaultModels", () => {
     );
 
     await waitFor(() => {
-      expect(getModelListMock).toHaveBeenCalledWith("w1");
+      expect(getSettingsModelListMock).toHaveBeenCalledTimes(1);
     });
 
-    rerender({ projects: [workspace("w2", true)] });
+    rerender({ projects: [workspace("w1", false)] });
 
     await waitFor(() => {
-      expect(getModelListMock).toHaveBeenCalledWith("w2");
+      expect(getSettingsModelListMock).toHaveBeenCalledTimes(2);
+      expect(result.current.connectedWorkspaceCount).toBe(0);
     });
 
     await act(async () => {

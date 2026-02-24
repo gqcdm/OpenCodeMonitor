@@ -797,6 +797,54 @@ impl DaemonState {
         codex_core::model_list_core(&self.sessions, workspace_id).await
     }
 
+    async fn settings_model_list(&self, workspace_id: Option<String>) -> Result<Value, String> {
+        let (codex_bin, codex_args) = {
+            let settings = self.app_settings.lock().await;
+            (settings.codex_bin.clone(), settings.codex_args.clone())
+        };
+        let directory = if let Some(workspace_id) = workspace_id.clone() {
+            let workspaces = self.workspaces.lock().await;
+            workspaces.get(&workspace_id).map(|entry| entry.path.clone())
+        } else {
+            None
+        };
+        let providers =
+            backend::app_server::global_rest_get(
+                codex_bin,
+                codex_args.as_deref(),
+                "/config/providers",
+                directory.as_deref(),
+            )
+            .await?;
+        let mut response = codex_core::model_list_response_from_providers(&providers);
+        if let Some(obj) = response.as_object_mut() {
+            obj.insert(
+                "debug".to_string(),
+                {
+                    let mut debug = codex_core::model_list_debug_from_providers(&providers);
+                    if let Some(debug_obj) = debug.as_object_mut() {
+                        debug_obj.insert("requestWorkspaceId".to_string(), json!(workspace_id));
+                        debug_obj.insert("requestDirectory".to_string(), json!(directory));
+                    }
+                    debug
+                },
+            );
+        }
+        Ok(response)
+    }
+
+    async fn opencode_server_status(&self) -> Result<Value, String> {
+        Ok(backend::app_server::opencode_server_status().await)
+    }
+
+    async fn opencode_server_restart(&self) -> Result<Value, String> {
+        let (codex_bin, codex_args) = {
+            let settings = self.app_settings.lock().await;
+            (settings.codex_bin.clone(), settings.codex_args.clone())
+        };
+        backend::app_server::restart_opencode_server(codex_bin, codex_args.as_deref()).await
+    }
+
     async fn collaboration_mode_list(&self, workspace_id: String) -> Result<Value, String> {
         codex_core::collaboration_mode_list_core(&self.sessions, workspace_id).await
     }

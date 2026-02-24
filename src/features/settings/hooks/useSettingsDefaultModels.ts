@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ModelOption, WorkspaceInfo } from "@/types";
-import { getModelList } from "@services/tauri";
+import { getSettingsModelList } from "@services/tauri";
 import { parseModelListResponse } from "@/features/models/utils/modelListResponse";
 
 type SettingsDefaultModelsState = {
@@ -57,7 +57,10 @@ function compareModelsByLatest(a: ModelOption, b: ModelOption): number {
   return a.model.localeCompare(b.model);
 }
 
-export function useSettingsDefaultModels(projects: WorkspaceInfo[]) {
+export function useSettingsDefaultModels(
+  projects: WorkspaceInfo[],
+  activeWorkspaceId?: string | null,
+) {
   const [state, setState] = useState<SettingsDefaultModelsState>(EMPTY_STATE);
   const requestIdRef = useRef(0);
 
@@ -67,68 +70,27 @@ export function useSettingsDefaultModels(projects: WorkspaceInfo[]) {
   );
 
   const refresh = useCallback(async () => {
-    const connected = connectedWorkspaces;
+    const connectedWorkspaceCount = connectedWorkspaces.length;
     requestIdRef.current += 1;
     const requestId = requestIdRef.current;
-    if (connected.length === 0) {
-      setState(EMPTY_STATE);
-      return;
-    }
     setState((prev) => ({
       ...prev,
       isLoading: true,
       error: null,
-      connectedWorkspaceCount: connected.length,
+      connectedWorkspaceCount,
     }));
 
     try {
-      const results = await Promise.allSettled(
-        connected.map((workspace) => getModelList(workspace.id)),
-      );
+      const response = await getSettingsModelList(activeWorkspaceId ?? null);
       if (requestId !== requestIdRef.current) {
         return;
       }
-
-      const modelBySlug = new Map<string, ModelOption>();
-      const errors: string[] = [];
-
-      results.forEach((result, index) => {
-        if (result.status === "rejected") {
-          const message =
-            result.reason instanceof Error
-              ? result.reason.message
-              : String(result.reason);
-          const workspaceName = connected[index]?.name ?? `workspace-${index + 1}`;
-          errors.push(`${workspaceName}: ${message}`);
-          return;
-        }
-        parseModelListResponse(result.value).forEach((model) => {
-          const slug = model.model;
-          if (!slug) {
-            return;
-          }
-          const existing = modelBySlug.get(slug);
-          if (!existing) {
-            modelBySlug.set(slug, model);
-            return;
-          }
-          // Prefer the entry that includes more metadata (e.g., reasoning efforts).
-          const existingEfforts = existing.supportedReasoningEfforts.length;
-          const nextEfforts = model.supportedReasoningEfforts.length;
-          const preferNext =
-            (model.isDefault && !existing.isDefault) || nextEfforts > existingEfforts;
-          if (preferNext) {
-            modelBySlug.set(slug, model);
-          }
-        });
-      });
-
-      const models = Array.from(modelBySlug.values()).sort(compareModelsByLatest);
+      const models = parseModelListResponse(response).sort(compareModelsByLatest);
       setState({
         models,
         isLoading: false,
-        error: errors.length ? errors.join(" | ") : null,
-        connectedWorkspaceCount: connected.length,
+        error: null,
+        connectedWorkspaceCount,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -137,11 +99,11 @@ export function useSettingsDefaultModels(projects: WorkspaceInfo[]) {
           models: [],
           isLoading: false,
           error: message,
-          connectedWorkspaceCount: connected.length,
+          connectedWorkspaceCount,
         });
       }
     }
-  }, [connectedWorkspaces]);
+  }, [activeWorkspaceId, connectedWorkspaces]);
 
   useEffect(() => {
     void refresh();

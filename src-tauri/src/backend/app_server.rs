@@ -55,11 +55,57 @@ struct ServerProcess {
     base_url: String,
 }
 
+fn rest_base_url() -> String {
+    format!("http://127.0.0.1:{REST_PORT}")
+}
+
+async fn start_managed_server_process(
+    codex_bin: Option<String>,
+    codex_args: Option<&str>,
+) -> Result<ServerProcess, String> {
+    let base_url = rest_base_url();
+    let mut command = build_codex_command_with_bin(
+        codex_bin,
+        codex_args,
+        vec![
+            "serve".to_string(),
+            "--port".to_string(),
+            REST_PORT.to_string(),
+        ],
+    )?;
+    command.stdin(std::process::Stdio::null());
+    command.stdout(std::process::Stdio::null());
+    command.stderr(std::process::Stdio::null());
+
+    let child = command.spawn().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            "OpenCode CLI not found. Install OpenCode and ensure `opencode` is on your PATH."
+                .to_string()
+        } else {
+            e.to_string()
+        }
+    })?;
+
+    let start = std::time::Instant::now();
+    let health_timeout = Duration::from_secs(30);
+    loop {
+        if start.elapsed() > health_timeout {
+            return Err("OpenCode server did not become healthy within 30 seconds.".to_string());
+        }
+        if health_check(&base_url).await.is_ok() {
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    Ok(ServerProcess { child, base_url })
+}
+
 async fn ensure_server_running(
     codex_bin: Option<String>,
     codex_args: Option<&str>,
 ) -> Result<String, String> {
-    let base_url = format!("http://127.0.0.1:{REST_PORT}");
+    let base_url = rest_base_url();
 
     // Fast path: if already initialized, just return the URL.
     if SERVER_PROCESS.get().is_some() {
@@ -73,47 +119,8 @@ async fn ensure_server_running(
 
     let init_result = SERVER_PROCESS
         .get_or_try_init(|| async {
-            let mut command = build_codex_command_with_bin(
-                codex_bin,
-                codex_args,
-                vec![
-                    "serve".to_string(),
-                    "--port".to_string(),
-                    REST_PORT.to_string(),
-                ],
-            )?;
-            command.stdin(std::process::Stdio::null());
-            command.stdout(std::process::Stdio::null());
-            command.stderr(std::process::Stdio::null());
-
-            let child = command.spawn().map_err(|e| {
-                if e.kind() == ErrorKind::NotFound {
-                    "OpenCode CLI not found. Install OpenCode and ensure `opencode` is on your PATH."
-                        .to_string()
-                } else {
-                    e.to_string()
-                }
-            })?;
-
-            // Poll health endpoint until ready.
-            let start = std::time::Instant::now();
-            let health_timeout = Duration::from_secs(30);
-            loop {
-                if start.elapsed() > health_timeout {
-                    return Err(
-                        "OpenCode server did not become healthy within 30 seconds.".to_string()
-                    );
-                }
-                if health_check(&base_url).await.is_ok() {
-                    break;
-                }
-                sleep(Duration::from_millis(200)).await;
-            }
-
-            Ok(Mutex::new(ServerProcess {
-                child,
-                base_url: base_url.clone(),
-            }))
+            let server = start_managed_server_process(codex_bin, codex_args).await?;
+            Ok::<Mutex<ServerProcess>, String>(Mutex::new(server))
         })
         .await;
 
@@ -137,6 +144,89 @@ async fn health_check(base_url: &str) -> Result<Value, String> {
         return Err(format!("health check returned {}", resp.status()));
     }
     resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+pub(crate) async fn global_rest_get(
+    codex_bin: Option<String>,
+    codex_args: Option<&str>,
+    path: &str,
+    directory: Option<&str>,
+) -> Result<Value, String> {
+    let base_url = ensure_server_running(codex_bin, codex_args).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut url = format!("{base_url}{path}");
+    if let Some(directory) = directory.filter(|value| !value.trim().is_empty()) {
+        let separator = if path.contains('?') { "&" } else { "?" };
+        url = format!("{url}{separator}directory={}", urlencoding::encode(directory));
+    }
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("REST GET {path} failed ({status}): {body}"));
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+pub(crate) async fn opencode_server_status() -> Value {
+    let base_url = rest_base_url();
+    let managed = SERVER_PROCESS.get().is_some();
+    match health_check(&base_url).await {
+        Ok(health) => json!({
+            "baseUrl": base_url,
+            "healthy": true,
+            "managed": managed,
+            "source": if managed { "managed" } else { "external" },
+            "version": health.get("version").cloned().unwrap_or(Value::Null),
+            "health": health,
+        }),
+        Err(error) => json!({
+            "baseUrl": base_url,
+            "healthy": false,
+            "managed": managed,
+            "source": if managed { "managed" } else { "none" },
+            "version": Value::Null,
+            "error": error,
+        }),
+    }
+}
+
+pub(crate) async fn restart_opencode_server(
+    codex_bin: Option<String>,
+    codex_args: Option<&str>,
+) -> Result<Value, String> {
+    let base_url = rest_base_url();
+    if let Some(server_mutex) = SERVER_PROCESS.get() {
+        let mut guard = server_mutex.lock().await;
+        let _ = kill_child_process_tree(&mut guard.child).await;
+        let replacement = start_managed_server_process(codex_bin, codex_args).await?;
+        *guard = replacement;
+        return Ok(json!({
+            "restarted": true,
+            "status": opencode_server_status().await,
+        }));
+    }
+
+    if health_check(&base_url).await.is_ok() {
+        return Err(format!(
+            "OpenCode server at {base_url} is running but is not managed by OpenCode Monitor. Stop it manually, then retry."
+        ));
+    }
+
+    let _ = SERVER_PROCESS
+        .get_or_try_init(|| async {
+            let server = start_managed_server_process(codex_bin, codex_args).await?;
+            Ok::<Mutex<ServerProcess>, String>(Mutex::new(server))
+        })
+        .await?;
+
+    Ok(json!({
+        "restarted": true,
+        "status": opencode_server_status().await,
+    }))
 }
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,8 @@ import type {
   WorkspaceSettings,
   WorkspaceInfo,
 } from "@/types";
+import type { OpenCodeServerStatus } from "@services/tauri";
+import { getOpenCodeServerStatus, restartOpenCodeServer } from "@services/tauri";
 import { useGlobalAgentsMd } from "./useGlobalAgentsMd";
 import { useGlobalOpenCodeConfig } from "./useGlobalCodexConfigToml";
 import { useSettingsDefaultModels } from "./useSettingsDefaultModels";
@@ -19,6 +21,7 @@ import {
 type UseSettingsCodexSectionArgs = {
   appSettings: AppSettings;
   projects: WorkspaceInfo[];
+  activeWorkspaceId?: string | null;
   onUpdateAppSettings: (next: AppSettings) => Promise<void>;
   onRunDoctor: (
     codexBin: string | null,
@@ -43,6 +46,13 @@ export type SettingsCodexSectionProps = {
   defaultModelsError: string | null;
   defaultModelsConnectedWorkspaceCount: number;
   onRefreshDefaultModels: () => void;
+  opencodeServerStatus: OpenCodeServerStatus | null;
+  opencodeServerStatusLoading: boolean;
+  opencodeServerStatusError: string | null;
+  opencodeServerStatusLastCheckedAt: number | null;
+  opencodeServerRestarting: boolean;
+  onRefreshOpenCodeServerStatus: () => void;
+  onRestartOpenCodeServer: () => void;
   codexPathDraft: string;
   codexArgsDraft: string;
   codexDirty: boolean;
@@ -98,6 +108,7 @@ export type SettingsCodexSectionProps = {
 export const useSettingsCodexSection = ({
   appSettings,
   projects,
+  activeWorkspaceId,
   onUpdateAppSettings,
   onRunDoctor,
   onRunCodexUpdate,
@@ -124,6 +135,15 @@ export const useSettingsCodexSection = ({
     status: "idle" | "running" | "done";
     result: CodexUpdateResult | null;
   }>({ status: "idle", result: null });
+  const [opencodeServerStatus, setOpenCodeServerStatus] = useState<OpenCodeServerStatus | null>(
+    null,
+  );
+  const [opencodeServerStatusLoading, setOpenCodeServerStatusLoading] = useState(false);
+  const [opencodeServerStatusError, setOpenCodeServerStatusError] = useState<string | null>(null);
+  const [opencodeServerStatusLastCheckedAt, setOpenCodeServerStatusLastCheckedAt] = useState<
+    number | null
+  >(null);
+  const [opencodeServerRestarting, setOpenCodeServerRestarting] = useState(false);
 
   const {
     models: defaultModels,
@@ -131,7 +151,7 @@ export const useSettingsCodexSection = ({
     error: defaultModelsError,
     connectedWorkspaceCount: defaultModelsConnectedWorkspaceCount,
     refresh: refreshDefaultModels,
-  } = useSettingsDefaultModels(projects);
+  } = useSettingsDefaultModels(projects, activeWorkspaceId ?? null);
 
   const {
     content: globalAgentsContent,
@@ -182,6 +202,24 @@ export const useSettingsCodexSection = ({
   useEffect(() => {
     setCodexArgsDraft(appSettings.codexArgs ?? "");
   }, [appSettings.codexArgs]);
+
+  const refreshOpenCodeServerStatus = async () => {
+    setOpenCodeServerStatusLoading(true);
+    setOpenCodeServerStatusError(null);
+    try {
+      const status = await getOpenCodeServerStatus();
+      setOpenCodeServerStatus(status);
+      setOpenCodeServerStatusLastCheckedAt(Date.now());
+    } catch (error) {
+      setOpenCodeServerStatusError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpenCodeServerStatusLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshOpenCodeServerStatus();
+  }, []);
 
   useEffect(() => {
     setCodexBinOverrideDrafts((prev) =>
@@ -292,6 +330,25 @@ export const useSettingsCodexSection = ({
     }
   };
 
+  const handleRestartOpenCodeServer = async () => {
+    setOpenCodeServerRestarting(true);
+    setOpenCodeServerStatusError(null);
+    try {
+      const result = await restartOpenCodeServer();
+      if (result?.status) {
+        setOpenCodeServerStatus(result.status);
+        setOpenCodeServerStatusLastCheckedAt(Date.now());
+      } else {
+        await refreshOpenCodeServerStatus();
+      }
+      await refreshDefaultModels();
+    } catch (error) {
+      setOpenCodeServerStatusError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpenCodeServerRestarting(false);
+    }
+  };
+
   return {
     appSettings,
     onUpdateAppSettings,
@@ -301,6 +358,17 @@ export const useSettingsCodexSection = ({
     defaultModelsConnectedWorkspaceCount,
     onRefreshDefaultModels: () => {
       void refreshDefaultModels();
+    },
+    opencodeServerStatus,
+    opencodeServerStatusLoading,
+    opencodeServerStatusError,
+    opencodeServerStatusLastCheckedAt,
+    opencodeServerRestarting,
+    onRefreshOpenCodeServerStatus: () => {
+      void refreshOpenCodeServerStatus();
+    },
+    onRestartOpenCodeServer: () => {
+      void handleRestartOpenCodeServer();
     },
     codexPathDraft,
     codexArgsDraft,

@@ -8,7 +8,10 @@ pub(crate) mod args;
 pub(crate) mod config;
 pub(crate) mod home;
 
-use crate::backend::app_server::spawn_workspace_session as spawn_workspace_session_inner;
+use crate::backend::app_server::{
+    global_rest_get, opencode_server_status as app_server_status,
+    restart_opencode_server as app_server_restart, spawn_workspace_session as spawn_workspace_session_inner,
+};
 pub(crate) use crate::backend::app_server::WorkspaceSession;
 use crate::backend::events::AppServerEvent;
 use crate::event_sink::TauriEventSink;
@@ -479,6 +482,82 @@ pub(crate) async fn model_list(
     }
 
     codex_core::model_list_core(&state.sessions, workspace_id).await
+}
+
+#[tauri::command]
+pub(crate) async fn settings_model_list(
+    workspace_id: Option<String>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "settings_model_list",
+            json!({ "workspaceId": workspace_id }),
+        )
+        .await;
+    }
+
+    let (codex_bin, codex_args) = {
+        let settings = state.app_settings.lock().await;
+        (settings.codex_bin.clone(), settings.codex_args.clone())
+    };
+    let directory = if let Some(workspace_id) = workspace_id.clone() {
+        let workspaces = state.workspaces.lock().await;
+        workspaces.get(&workspace_id).map(|entry| entry.path.clone())
+    } else {
+        None
+    };
+    let providers = global_rest_get(
+        codex_bin,
+        codex_args.as_deref(),
+        "/config/providers",
+        directory.as_deref(),
+    )
+    .await?;
+    let mut response = codex_core::model_list_response_from_providers(&providers);
+    if let Some(obj) = response.as_object_mut() {
+        obj.insert(
+            "debug".to_string(),
+            {
+                let mut debug = codex_core::model_list_debug_from_providers(&providers);
+                if let Some(debug_obj) = debug.as_object_mut() {
+                    debug_obj.insert("requestWorkspaceId".to_string(), json!(workspace_id));
+                    debug_obj.insert("requestDirectory".to_string(), json!(directory));
+                }
+                debug
+            },
+        );
+    }
+    Ok(response)
+}
+
+#[tauri::command]
+pub(crate) async fn opencode_server_status(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(&*state, app, "opencode_server_status", json!({})).await;
+    }
+    Ok(app_server_status().await)
+}
+
+#[tauri::command]
+pub(crate) async fn opencode_server_restart(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(&*state, app, "opencode_server_restart", json!({})).await;
+    }
+    let (codex_bin, codex_args) = {
+        let settings = state.app_settings.lock().await;
+        (settings.codex_bin.clone(), settings.codex_args.clone())
+    };
+    app_server_restart(codex_bin, codex_args.as_deref()).await
 }
 
 #[tauri::command]

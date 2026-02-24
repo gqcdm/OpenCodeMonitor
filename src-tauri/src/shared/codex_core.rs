@@ -1578,30 +1578,7 @@ pub(crate) async fn start_review_core(
 // Model list (REST: GET /config/providers)
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn model_list_core(
-    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    workspace_id: String,
-) -> Result<Value, String> {
-    let session = get_session_clone(sessions, &workspace_id).await?;
-
-    // Try to refresh from server; fall back to cache.
-    let providers = match session.rest_get("/config/providers").await {
-        Ok(fresh) => {
-            *session.models_cache.lock().await = Some(fresh.clone());
-            fresh
-        }
-        Err(_) => {
-            let cache = session.models_cache.lock().await.clone();
-            cache.unwrap_or(json!({}))
-        }
-    };
-
-    let context_windows = event_translator::extract_model_context_windows(&providers);
-    {
-        let mut state = session.translation_state.lock().await;
-        state.replace_model_context_windows(context_windows);
-    }
-
+pub(crate) fn model_list_response_from_providers(providers: &Value) -> Value {
     // REST returns:
     //   providers: [{ id, models: { "model-id": { id, name, ... }, ... } }]
     //   default:   { "provider-id": "model-id", ... }
@@ -1633,13 +1610,19 @@ pub(crate) async fn model_list_core(
             .and_then(|v| v.as_object())
             .cloned()
             .unwrap_or_default();
-        for (_key, model) in &models_map {
-            let model_id = model
+        for (model_key, model) in &models_map {
+            let selectable_model_id = model_key.trim().to_string();
+            let canonical_model_id = model
                 .get("id")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .trim()
                 .to_string();
+            let model_id = if selectable_model_id.is_empty() {
+                canonical_model_id.clone()
+            } else {
+                selectable_model_id
+            };
             if model_id.is_empty() {
                 continue;
             }
@@ -1650,7 +1633,7 @@ pub(crate) async fn model_list_core(
                 .trim()
                 .to_string();
             let qualified_id = format!("{provider_id}/{model_id}");
-            let is_default = model_id == default_for_provider;
+            let is_default = model_id == default_for_provider || canonical_model_id == default_for_provider;
 
             // Variants keys are reasoning effort levels (e.g. "low", "medium", "high", "max").
             let variants = model
@@ -1681,7 +1664,112 @@ pub(crate) async fn model_list_core(
         }
     }
 
-    Ok(json!({ "result": { "data": data } }))
+    json!({ "result": { "data": data } })
+}
+
+pub(crate) fn model_list_debug_from_providers(providers: &Value) -> Value {
+    let defaults = providers
+        .get("default")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let provider_list = providers
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let provider_summaries: Vec<Value> = provider_list
+        .iter()
+        .map(|provider| {
+            let provider_id = provider
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let models_map = provider
+                .get("models")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            let mut model_entries: Vec<Value> = models_map
+                .iter()
+                .map(|(key, model)| {
+                    let nested_id = model
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    json!({
+                        "key": key,
+                        "nestedId": nested_id,
+                        "name": model.get("name").cloned().unwrap_or(Value::Null),
+                        "status": model.get("status").cloned().unwrap_or(Value::Null),
+                        "providerID": model.get("providerID").cloned().unwrap_or(Value::Null),
+                    })
+                })
+                .collect();
+            model_entries.sort_by(|a, b| {
+                a.get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .cmp(b.get("key").and_then(|v| v.as_str()).unwrap_or_default())
+            });
+
+            json!({
+                "id": provider_id,
+                "name": provider.get("name").cloned().unwrap_or(Value::Null),
+                "defaultFromConfig": defaults
+                    .get(provider.get("id").and_then(|v| v.as_str()).unwrap_or_default())
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "modelCount": model_entries.len(),
+                "models": model_entries,
+            })
+        })
+        .collect();
+
+    let transformed = model_list_response_from_providers(providers);
+    let transformed_data = transformed
+        .get("result")
+        .and_then(|v| v.get("data"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+
+    json!({
+        "source": "/config/providers",
+        "providerCount": provider_summaries.len(),
+        "providers": provider_summaries,
+        "transformedCount": transformed_data.as_array().map(|a| a.len()).unwrap_or(0),
+        "transformed": transformed_data,
+    })
+}
+
+pub(crate) async fn model_list_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+
+    // Try to refresh from server; fall back to cache.
+    let providers = match session.rest_get("/config/providers").await {
+        Ok(fresh) => {
+            *session.models_cache.lock().await = Some(fresh.clone());
+            fresh
+        }
+        Err(_) => {
+            let cache = session.models_cache.lock().await.clone();
+            cache.unwrap_or(json!({}))
+        }
+    };
+
+    let context_windows = event_translator::extract_model_context_windows(&providers);
+    {
+        let mut state = session.translation_state.lock().await;
+        state.replace_model_context_windows(context_windows);
+    }
+
+    Ok(model_list_response_from_providers(&providers))
 }
 
 // ---------------------------------------------------------------------------
@@ -2140,5 +2228,68 @@ mod tests {
         assert_eq!(thread["id"], "ses_child");
         assert_eq!(thread["parentId"], "ses_parent");
         assert_eq!(thread["preview"], "Child");
+    }
+
+    #[test]
+    fn model_list_response_preserves_provider_model_map_keys() {
+        let providers = json!({
+            "providers": [
+                {
+                    "id": "cliproxy",
+                    "models": {
+                        "claude-opus-4-5": {
+                            "id": "claude-opus-4-5-20250929",
+                            "name": "Claude Opus 4.5 (CLIProxy)",
+                            "variants": {}
+                        },
+                        "claude-opus-4-6": {
+                            "id": "claude-opus-4-6-20251001",
+                            "name": "Claude Opus 4.6 (CLIProxy)",
+                            "variants": {}
+                        }
+                    }
+                }
+            ],
+            "default": {
+                "cliproxy": "claude-opus-4-6-20251001"
+            }
+        });
+
+        let response = model_list_response_from_providers(&providers);
+        let data = response
+            .get("result")
+            .and_then(|v| v.get("data"))
+            .and_then(|v| v.as_array())
+            .expect("data array");
+
+        let rows: Vec<(String, String, bool)> = data
+            .iter()
+            .map(|item| {
+                (
+                    item.get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    item.get("model")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    item.get("isDefault")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                )
+            })
+            .collect();
+
+        assert!(rows.contains(&(
+            "cliproxy/claude-opus-4-5".to_string(),
+            "claude-opus-4-5".to_string(),
+            false
+        )));
+        assert!(rows.contains(&(
+            "cliproxy/claude-opus-4-6".to_string(),
+            "claude-opus-4-6".to_string(),
+            true
+        )));
     }
 }

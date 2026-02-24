@@ -19,6 +19,7 @@ import { ORBIT_SERVICES, SETTINGS_SECTION_LABELS } from "./settingsViewConstants
 import { SettingsSectionContainers } from "./sections/SettingsSectionContainers";
 
 export type SettingsViewProps = {
+  activeWorkspaceId?: string | null;
   workspaceGroups: WorkspaceGroup[];
   groupedWorkspaces: Array<{
     id: string | null;
@@ -69,6 +70,7 @@ export type SettingsViewProps = {
 };
 
 export function SettingsView({
+  activeWorkspaceId,
   workspaceGroups,
   groupedWorkspaces,
   ungroupedLabel,
@@ -110,6 +112,7 @@ export function SettingsView({
   } = useSettingsViewNavigation({ initialSection });
 
   const orchestration = useSettingsViewOrchestration({
+    activeWorkspaceId,
     workspaceGroups,
     groupedWorkspaces,
     ungroupedLabel,

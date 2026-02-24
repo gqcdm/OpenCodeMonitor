@@ -172,8 +172,11 @@ fn can_retry_after_disconnect(method: &str) -> bool {
             | "list_workspace_files"
             | "list_workspaces"
             | "model_list"
+            | "opencode_server_restart"
+            | "opencode_server_status"
             | "read_workspace_file"
             | "resume_thread"
+            | "settings_model_list"
             | "skills_list"
             | "worktree_setup_status"
     )

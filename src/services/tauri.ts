@@ -540,6 +540,28 @@ export async function getModelList(workspaceId: string) {
   return invoke<any>("model_list", { workspaceId });
 }
 
+export type OpenCodeServerStatus = {
+  baseUrl: string;
+  healthy: boolean;
+  managed: boolean;
+  source: "managed" | "external" | "none";
+  version?: string | null;
+  error?: string | null;
+  health?: unknown;
+};
+
+export async function getSettingsModelList(workspaceId?: string | null) {
+  return invoke<any>("settings_model_list", { workspaceId: workspaceId ?? null });
+}
+
+export async function getOpenCodeServerStatus() {
+  return invoke<OpenCodeServerStatus>("opencode_server_status");
+}
+
+export async function restartOpenCodeServer() {
+  return invoke<{ restarted: boolean; status?: OpenCodeServerStatus }>("opencode_server_restart");
+}
+
 export async function generateRunMetadata(workspaceId: string, prompt: string) {
   return invoke<{ title: string; worktreeName: string }>("generate_run_metadata", {
     workspaceId,

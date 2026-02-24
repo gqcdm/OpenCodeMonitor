@@ -11,7 +11,7 @@ import {
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { AppSettings, WorkspaceInfo } from "@/types";
-import { getModelList } from "@services/tauri";
+import { getSettingsModelList } from "@services/tauri";
 import { DEFAULT_COMMIT_MESSAGE_PROMPT } from "@utils/commitMessagePrompt";
 import { SettingsView } from "./SettingsView";
 
@@ -26,11 +26,19 @@ vi.mock("@services/tauri", async () => {
   );
   return {
     ...actual,
-    getModelList: vi.fn(),
+    getSettingsModelList: vi.fn(),
+    getOpenCodeServerStatus: vi.fn().mockResolvedValue({
+      baseUrl: "http://127.0.0.1:14096",
+      healthy: true,
+      managed: true,
+      source: "managed",
+      version: "test",
+    }),
+    restartOpenCodeServer: vi.fn().mockResolvedValue({ restarted: true }),
   };
 });
 
-const getModelListMock = vi.mocked(getModelList);
+const getSettingsModelListMock = vi.mocked(getSettingsModelList);
 
 const baseSettings: AppSettings = {
   codexBin: null,
@@ -1277,7 +1285,7 @@ describe("SettingsView Codex defaults", () => {
   it("uses the latest model and medium effort by default (no Default option)", async () => {
     cleanup();
     const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
-    getModelListMock.mockResolvedValue(
+    getSettingsModelListMock.mockResolvedValue(
       createModelListResponse([
         {
           id: "gpt-4.1",
@@ -1354,7 +1362,7 @@ describe("SettingsView Codex defaults", () => {
     ) as HTMLSelectElement;
 
     await waitFor(() => {
-      expect(getModelListMock).toHaveBeenCalledWith("w1");
+      expect(getSettingsModelListMock).toHaveBeenCalledTimes(1);
       expect(modelSelect.value).toBe("gpt-5.1");
     });
 
@@ -1375,7 +1383,7 @@ describe("SettingsView Codex defaults", () => {
   it("updates model and effort when the user changes the selects", async () => {
     cleanup();
     const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
-    getModelListMock.mockResolvedValue(
+    getSettingsModelListMock.mockResolvedValue(
       createModelListResponse([
         {
           id: "gpt-4.1",
@@ -1474,6 +1482,155 @@ describe("SettingsView Codex defaults", () => {
     await waitFor(() => {
       expect(onUpdateAppSettings).toHaveBeenCalledWith(
         expect.objectContaining({ lastComposerReasoningEffort: "high" }),
+      );
+    });
+  });
+
+  it("loads models from configured providers without a connected project", async () => {
+    cleanup();
+    const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
+    getSettingsModelListMock.mockResolvedValue(
+      createModelListResponse([
+        {
+          id: "gpt-5.1",
+          model: "gpt-5.1",
+          displayName: "GPT-5.1",
+          description: "",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "" }],
+          defaultReasoningEffort: "medium",
+          isDefault: true,
+        },
+      ]),
+    );
+
+    render(
+      <SettingsView
+        workspaceGroups={[]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace({ id: "w1", name: "Workspace", connected: false })],
+          },
+        ]}
+        ungroupedLabel="Ungrouped"
+        onClose={vi.fn()}
+        onMoveWorkspace={vi.fn()}
+        onDeleteWorkspace={vi.fn()}
+        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        reduceTransparency={false}
+        onToggleTransparency={vi.fn()}
+        appSettings={baseSettings}
+        openAppIconById={{}}
+        onUpdateAppSettings={onUpdateAppSettings}
+        onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
+        onRunCodexUpdate={vi.fn().mockResolvedValue(createUpdateResult())}
+        onUpdateWorkspaceCodexBin={vi.fn().mockResolvedValue(undefined)}
+        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
+        scaleShortcutTitle="Scale shortcut"
+        scaleShortcutText="Use Command +/-"
+        onTestNotificationSound={vi.fn()}
+        onTestSystemNotification={vi.fn()}
+        dictationModelStatus={null}
+        onDownloadDictationModel={vi.fn()}
+        onCancelDictationDownload={vi.fn()}
+        onRemoveDictationModel={vi.fn()}
+        initialSection="codex"
+      />,
+    );
+
+    const modelSelect = screen.getByLabelText("Model") as HTMLSelectElement;
+
+    await waitFor(() => {
+      expect(getSettingsModelListMock).toHaveBeenCalled();
+      expect(modelSelect.value).toBe("gpt-5.1");
+    });
+  });
+
+  it("preserves provider-qualified selection when providers share the same model slug", async () => {
+    cleanup();
+    const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
+    getSettingsModelListMock.mockResolvedValue(
+      createModelListResponse([
+        {
+          id: "opencode/opus-4.6",
+          provider: "opencode",
+          model: "opus-4.6",
+          displayName: "Opus 4.6",
+          description: "",
+          supportedReasoningEfforts: [],
+          defaultReasoningEffort: null,
+          isDefault: false,
+        },
+        {
+          id: "cliproxy/opus-4.6",
+          provider: "cliproxy",
+          model: "opus-4.6",
+          displayName: "Opus 4.6",
+          description: "",
+          supportedReasoningEfforts: [],
+          defaultReasoningEffort: null,
+          isDefault: false,
+        },
+      ]),
+    );
+
+    render(
+      <SettingsView
+        workspaceGroups={[]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace({ id: "w1", name: "Workspace", connected: false })],
+          },
+        ]}
+        ungroupedLabel="Ungrouped"
+        onClose={vi.fn()}
+        onMoveWorkspace={vi.fn()}
+        onDeleteWorkspace={vi.fn()}
+        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        reduceTransparency={false}
+        onToggleTransparency={vi.fn()}
+        appSettings={{ ...baseSettings, lastComposerModelId: "cliproxy/opus-4.6" }}
+        openAppIconById={{}}
+        onUpdateAppSettings={onUpdateAppSettings}
+        onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
+        onRunCodexUpdate={vi.fn().mockResolvedValue(createUpdateResult())}
+        onUpdateWorkspaceCodexBin={vi.fn().mockResolvedValue(undefined)}
+        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
+        scaleShortcutTitle="Scale shortcut"
+        scaleShortcutText="Use Command +/-"
+        onTestNotificationSound={vi.fn()}
+        onTestSystemNotification={vi.fn()}
+        dictationModelStatus={null}
+        onDownloadDictationModel={vi.fn()}
+        onCancelDictationDownload={vi.fn()}
+        onRemoveDictationModel={vi.fn()}
+        initialSection="codex"
+      />,
+    );
+
+    const modelSelect = screen.getByLabelText("Model") as HTMLSelectElement;
+
+    await waitFor(() => {
+      expect(modelSelect.value).toBe("cliproxy/opus-4.6");
+    });
+
+    onUpdateAppSettings.mockClear();
+    fireEvent.change(modelSelect, { target: { value: "opencode/opus-4.6" } });
+
+    await waitFor(() => {
+      expect(onUpdateAppSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ lastComposerModelId: "opencode/opus-4.6" }),
       );
     });
   });
