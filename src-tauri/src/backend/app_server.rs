@@ -263,6 +263,34 @@ impl WorkspaceSession {
         // Parse as bool; fall back to true on success status.
         Ok(text.trim().parse::<bool>().unwrap_or(true))
     }
+
+    /// Send a PATCH request to the OpenCode REST API, scoped to this workspace.
+    pub(crate) async fn rest_patch(&self, path: &str, body: Value) -> Result<Value, String> {
+        let separator = if path.contains('?') { "&" } else { "?" };
+        let url = format!(
+            "{}{path}{separator}directory={}",
+            self.base_url,
+            urlencoding::encode(&self.entry.path)
+        );
+        let resp = self
+            .http_client
+            .patch(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("REST PATCH {path} failed ({status}): {body}"));
+        }
+        let text = resp.text().await.map_err(|e| e.to_string())?;
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text)
+            .map_err(|e| format!("Failed to parse response from {path}: {e}"))
+    }
 }
 
 // ---------------------------------------------------------------------------

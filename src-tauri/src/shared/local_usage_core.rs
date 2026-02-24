@@ -297,14 +297,8 @@ fn scan_opencode_db_usage(
         };
 
         let tokens = value.get("tokens").and_then(|v| v.as_object());
-        let uncached_input = tokens
-            .map(|m| read_i64(m, &["input"]))
-            .unwrap_or(0)
-            .max(0);
-        let output = tokens
-            .map(|m| read_i64(m, &["output"]))
-            .unwrap_or(0)
-            .max(0);
+        let uncached_input = tokens.map(|m| read_i64(m, &["input"])).unwrap_or(0).max(0);
+        let output = tokens.map(|m| read_i64(m, &["output"])).unwrap_or(0).max(0);
         let raw_cached_read = tokens
             .and_then(|m| m.get("cache"))
             .and_then(|cache| cache.as_object())
@@ -340,8 +334,8 @@ fn scan_opencode_db_usage(
         }
 
         if total_for_model > 0 {
-            let model = extract_model_from_opencode_message(&value)
-                .unwrap_or_else(UsageModelKey::unknown);
+            let model =
+                extract_model_from_opencode_message(&value).unwrap_or_else(UsageModelKey::unknown);
             *model_totals.entry(model).or_insert(0) += total_for_model;
         }
     }
@@ -367,7 +361,12 @@ fn resolve_opencode_sqlite_path() -> Option<PathBuf> {
     }
 
     let home = resolve_user_home_dir()?;
-    candidates.push(home.join(".local").join("share").join("opencode").join("opencode.db"));
+    candidates.push(
+        home.join(".local")
+            .join("share")
+            .join("opencode")
+            .join("opencode.db"),
+    );
     candidates.push(
         home.join("Library")
             .join("Application Support")

@@ -152,6 +152,9 @@ const GitHubPanelData = lazy(() =>
 );
 
 function MainApp() {
+  const steerFeatureEnabled = false;
+  const appsFeatureEnabled = false;
+
   const {
     appSettings,
     setAppSettings,
@@ -569,7 +572,7 @@ function MainApp() {
     collaborationMode: collaborationModePayload,
     accessMode,
     reviewDeliveryMode: appSettings.reviewDeliveryMode,
-    steerEnabled: appSettings.steerEnabled,
+    steerEnabled: steerFeatureEnabled,
     threadTitleAutogenerationEnabled: appSettings.threadTitleAutogenerationEnabled,
     customPrompts: prompts,
     onMessageActivity: handleThreadMessageActivity,
@@ -754,7 +757,7 @@ function MainApp() {
   const { apps } = useApps({
     activeWorkspace,
     activeThreadId,
-    enabled: appSettings.experimentalAppsEnabled,
+    enabled: appsFeatureEnabled,
     onDebug: addDebugEntry,
   });
 
@@ -1177,8 +1180,8 @@ function MainApp() {
     activeWorkspace,
     isProcessing,
     isReviewing,
-    steerEnabled: appSettings.steerEnabled,
-    appsEnabled: appSettings.experimentalAppsEnabled,
+    steerEnabled: steerFeatureEnabled,
+    appsEnabled: appsFeatureEnabled,
     connectWorkspace,
     startThreadForWorkspace,
     sendUserMessage,
@@ -2033,7 +2036,7 @@ function MainApp() {
     onFileAutocompleteActiveChange: setFileAutocompleteActive,
     isReviewing,
     isProcessing,
-    steerEnabled: appSettings.steerEnabled,
+    steerEnabled: steerFeatureEnabled,
     reviewPrompt,
     onReviewPromptClose: closeReviewPrompt,
     onReviewPromptShowPreset: showPresetStep,
@@ -2087,7 +2090,7 @@ function MainApp() {
     accessMode,
     onSelectAccessMode: handleSelectAccessMode,
     skills,
-    appsEnabled: appSettings.experimentalAppsEnabled,
+    appsEnabled: appsFeatureEnabled,
     apps,
     prompts,
     files,
@@ -2187,7 +2190,7 @@ function MainApp() {
       threadStatusById={threadStatusById}
       onSelectInstance={handleSelectWorkspaceInstance}
       skills={skills}
-      appsEnabled={appSettings.experimentalAppsEnabled}
+      appsEnabled={appsFeatureEnabled}
       apps={apps}
       prompts={prompts}
       files={files}

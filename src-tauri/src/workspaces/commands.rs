@@ -33,13 +33,7 @@ fn spawn_with_app(
     codex_args: Option<String>,
     codex_home: Option<PathBuf>,
 ) -> impl std::future::Future<Output = Result<Arc<WorkspaceSession>, String>> {
-    spawn_workspace_session(
-        entry,
-        default_bin,
-        codex_args,
-        app.clone(),
-        codex_home,
-    )
+    spawn_workspace_session(entry, default_bin, codex_args, app.clone(), codex_home)
 }
 
 #[tauri::command]

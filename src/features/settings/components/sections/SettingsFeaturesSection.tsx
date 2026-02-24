@@ -20,7 +20,7 @@ export function SettingsFeaturesSection({
     <section className="settings-section">
       <div className="settings-section-title">Features</div>
       <div className="settings-section-subtitle">
-        Manage stable and experimental Codex features.
+        Manage stable and experimental app features.
       </div>
       {hasCodexHomeOverrides && (
         <div className="settings-help">
@@ -92,27 +92,6 @@ export function SettingsFeaturesSection({
       </div>
       <div className="settings-toggle-row">
         <div>
-          <div className="settings-toggle-title">Steer mode</div>
-          <div className="settings-toggle-subtitle">
-            Send messages immediately. Use Tab to queue while a run is active.
-          </div>
-        </div>
-        <button
-          type="button"
-          className={`settings-toggle ${appSettings.steerEnabled ? "on" : ""}`}
-          onClick={() =>
-            void onUpdateAppSettings({
-              ...appSettings,
-              steerEnabled: !appSettings.steerEnabled,
-            })
-          }
-          aria-pressed={appSettings.steerEnabled}
-        >
-          <span className="settings-toggle-knob" />
-        </button>
-      </div>
-      <div className="settings-toggle-row">
-        <div>
           <div className="settings-toggle-title">Background terminal</div>
           <div className="settings-toggle-subtitle">
             Run long-running terminal commands in the background.
@@ -153,27 +132,6 @@ export function SettingsFeaturesSection({
             })
           }
           aria-pressed={appSettings.experimentalCollabEnabled}
-        >
-          <span className="settings-toggle-knob" />
-        </button>
-      </div>
-      <div className="settings-toggle-row">
-        <div>
-          <div className="settings-toggle-title">Apps</div>
-          <div className="settings-toggle-subtitle">
-            Enable ChatGPT apps/connectors and the <code>/apps</code> command.
-          </div>
-        </div>
-        <button
-          type="button"
-          className={`settings-toggle ${appSettings.experimentalAppsEnabled ? "on" : ""}`}
-          onClick={() =>
-            void onUpdateAppSettings({
-              ...appSettings,
-              experimentalAppsEnabled: !appSettings.experimentalAppsEnabled,
-            })
-          }
-          aria-pressed={appSettings.experimentalAppsEnabled}
         >
           <span className="settings-toggle-knob" />
         </button>

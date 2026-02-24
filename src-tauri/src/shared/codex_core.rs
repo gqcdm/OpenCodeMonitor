@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
 use tokio::sync::{oneshot, Mutex};
@@ -96,10 +96,12 @@ fn replay_message_order_key(message: &Value) -> Option<String> {
 }
 
 fn sort_replay_messages_chronologically(messages: &mut [Value]) {
-    messages.sort_by(|a, b| match (replay_message_order_key(a), replay_message_order_key(b)) {
-        (Some(a_key), Some(b_key)) => a_key.cmp(&b_key),
-        _ => std::cmp::Ordering::Equal,
-    });
+    messages.sort_by(
+        |a, b| match (replay_message_order_key(a), replay_message_order_key(b)) {
+            (Some(a_key), Some(b_key)) => a_key.cmp(&b_key),
+            _ => std::cmp::Ordering::Equal,
+        },
+    );
 }
 
 async fn hidden_session_ids_for_workspace(
@@ -119,6 +121,121 @@ async fn hidden_session_ids_for_workspace(
                 .collect::<HashSet<_>>()
         })
         .unwrap_or_default()
+}
+
+fn session_is_archived(session: &Value) -> bool {
+    session
+        .get("time")
+        .and_then(|time| time.get("archived"))
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|n| (n > 0).then_some(n as u64)))
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .filter(|n| *n > 0)
+                })
+        })
+        .is_some()
+}
+
+fn session_to_thread_entry(session: &Value) -> Option<Value> {
+    let id = session
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if id.is_empty() {
+        return None;
+    }
+
+    let title = session
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let updated_at = session
+        .get("updatedAt")
+        .or_else(|| session.get("updated_at"))
+        .or_else(|| session.get("time").and_then(|time| time.get("updated")))
+        .or_else(|| session.get("time").and_then(|time| time.get("updatedAt")))
+        .or_else(|| session.get("time").and_then(|time| time.get("updated_at")))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let created_at = session
+        .get("createdAt")
+        .or_else(|| session.get("created_at"))
+        .or_else(|| session.get("time").and_then(|time| time.get("created")))
+        .or_else(|| session.get("time").and_then(|time| time.get("createdAt")))
+        .or_else(|| session.get("time").and_then(|time| time.get("created_at")))
+        .cloned()
+        .unwrap_or_else(|| updated_at.clone());
+    let directory = session
+        .get("directory")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let parent_id = session
+        .get("parentID")
+        .or_else(|| session.get("parentId"))
+        .or_else(|| session.get("parent_id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    let mut entry = json!({
+        "id": id,
+        "cwd": directory,
+        "name": title,
+        "preview": title,
+        "updatedAt": updated_at,
+        "createdAt": created_at
+    });
+    if let Some(pid) = parent_id {
+        entry["parentId"] = json!(pid);
+    }
+    Some(entry)
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn review_target_to_opencode_arguments(target: &Value) -> Result<String, String> {
+    let kind = target
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or_default();
+
+    match kind {
+        "" | "uncommittedChanges" => Ok(String::new()),
+        "baseBranch" => target
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "review target missing branch".to_string()),
+        "commit" => target
+            .get("sha")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "review target missing sha".to_string()),
+        "custom" => target
+            .get("instructions")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "review target missing instructions".to_string()),
+        other => Err(format!("unsupported review target type: {other}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -425,11 +542,23 @@ fn replay_build_tool_item(
 }
 
 pub(crate) async fn fork_thread_core(
-    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    _workspace_id: String,
-    _thread_id: String,
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
 ) -> Result<Value, String> {
-    Err("fork is not supported yet".to_string())
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let path = format!("/session/{thread_id}/fork");
+    let response = session.rest_post(&path, json!({})).await?;
+    let thread = session_to_thread_entry(&response).unwrap_or_else(|| {
+        json!({
+            "id": response.get("id").and_then(|v| v.as_str()).unwrap_or_default()
+        })
+    });
+    Ok(json!({
+        "result": {
+            "thread": thread
+        }
+    }))
 }
 
 pub(crate) async fn list_threads_core(
@@ -459,45 +588,10 @@ pub(crate) async fn list_threads_core(
             if !include_hidden && hidden_session_ids.contains(id) {
                 return None;
             }
-            let title = s.get("title").and_then(|v| v.as_str()).unwrap_or_default();
-            let updated_at = s
-                .get("updatedAt")
-                .or_else(|| s.get("updated_at"))
-                .or_else(|| s.get("time").and_then(|time| time.get("updated")))
-                .or_else(|| s.get("time").and_then(|time| time.get("updatedAt")))
-                .or_else(|| s.get("time").and_then(|time| time.get("updated_at")))
-                .cloned()
-                .unwrap_or(Value::Null);
-            let created_at = s
-                .get("createdAt")
-                .or_else(|| s.get("created_at"))
-                .or_else(|| s.get("time").and_then(|time| time.get("created")))
-                .or_else(|| s.get("time").and_then(|time| time.get("createdAt")))
-                .or_else(|| s.get("time").and_then(|time| time.get("created_at")))
-                .cloned()
-                .unwrap_or_else(|| updated_at.clone());
-            let directory = s
-                .get("directory")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            let parent_id = s
-                .get("parentID")
-                .or_else(|| s.get("parentId"))
-                .or_else(|| s.get("parent_id"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty());
-            let mut entry = json!({
-                "id": id,
-                "cwd": directory,
-                "name": title,
-                "preview": title,
-                "updatedAt": updated_at,
-                "createdAt": created_at
-            });
-            if let Some(pid) = parent_id {
-                entry["parentId"] = json!(pid);
+            if !include_hidden && session_is_archived(&s) {
+                return None;
             }
-            Some(entry)
+            session_to_thread_entry(&s)
         })
         .collect();
     Ok(json!({
@@ -509,20 +603,65 @@ pub(crate) async fn list_threads_core(
 }
 
 pub(crate) async fn list_mcp_server_status_core(
-    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    _workspace_id: String,
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
     _cursor: Option<String>,
-    _limit: Option<u32>,
+    limit: Option<u32>,
 ) -> Result<Value, String> {
-    Ok(json!({ "result": { "data": [], "nextCursor": null } }))
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let response = session.rest_get("/mcp").await?;
+
+    let mut data = response
+        .as_object()
+        .map(|map| {
+            let mut entries = map
+                .iter()
+                .map(|(name, status)| {
+                    let status_label = status
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| status.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    json!({
+                        "name": name,
+                        "status": status_label,
+                        "authStatus": status,
+                        "auth_status": status,
+                        "tools": {},
+                        "resources": [],
+                        "resourceTemplates": [],
+                        "resource_templates": []
+                    })
+                })
+                .collect::<Vec<_>>();
+            entries.sort_by(|a, b| {
+                a.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or_default())
+            });
+            entries
+        })
+        .unwrap_or_default();
+
+    if let Some(limit) = limit {
+        data.truncate(limit as usize);
+    }
+
+    Ok(json!({ "result": { "data": data, "nextCursor": null } }))
 }
 
 pub(crate) async fn archive_thread_core(
-    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    _workspace_id: String,
-    _thread_id: String,
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
 ) -> Result<Value, String> {
-    // Archive is UI-only (handled by frontend localStorage).
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let path = format!("/session/{thread_id}");
+    session
+        .rest_patch(&path, json!({ "time": { "archived": now_unix_ms() } }))
+        .await?;
     Ok(json!({ "ok": true }))
 }
 
@@ -541,12 +680,16 @@ pub(crate) async fn compact_thread_core(
 }
 
 pub(crate) async fn set_thread_name_core(
-    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    _workspace_id: String,
-    _thread_id: String,
-    _name: String,
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    name: String,
 ) -> Result<Value, String> {
-    // No REST equivalent — name is stored locally by the frontend.
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let path = format!("/session/{thread_id}");
+    session
+        .rest_patch(&path, json!({ "title": name.trim() }))
+        .await?;
     Ok(json!({ "ok": true }))
 }
 
@@ -1071,13 +1214,46 @@ pub(crate) async fn collaboration_mode_list_core(
 }
 
 pub(crate) async fn start_review_core(
-    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    _workspace_id: String,
-    _thread_id: String,
-    _target: Value,
-    _delivery: Option<String>,
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    target: Value,
+    delivery: Option<String>,
 ) -> Result<Value, String> {
-    Err("review is not supported yet".to_string())
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let arguments = review_target_to_opencode_arguments(&target)?;
+
+    let detached = delivery
+        .as_deref()
+        .map(str::trim)
+        .map(|value| value.eq_ignore_ascii_case("detached"))
+        .unwrap_or(false);
+
+    let review_thread_id = if detached {
+        let fork_path = format!("/session/{thread_id}/fork");
+        let forked = session.rest_post(&fork_path, json!({})).await?;
+        forked
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "failed to fork review thread".to_string())?
+            .to_string()
+    } else {
+        thread_id.clone()
+    };
+
+    let command_path = format!("/session/{review_thread_id}/command");
+    let body = json!({
+        "command": "review",
+        "arguments": arguments,
+    });
+    let _ = session.rest_post(&command_path, body).await?;
+
+    Ok(json!({
+        "result": {
+            "reviewThreadId": review_thread_id
+        }
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,10 +1478,44 @@ pub(crate) async fn codex_login_cancel_core(
 }
 
 pub(crate) async fn skills_list_core(
-    _sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
-    _workspace_id: String,
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
 ) -> Result<Value, String> {
-    Ok(json!({ "result": { "data": [] } }))
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let response = session.rest_get("/skill").await?;
+    let skills = response
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|skill| {
+            let name = skill
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .unwrap_or_default();
+            if name.is_empty() {
+                return None;
+            }
+            let path = skill
+                .get("location")
+                .or_else(|| skill.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let description = skill
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+
+            Some(json!({
+                "name": name,
+                "path": path,
+                "description": description
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({ "result": { "skills": skills } }))
 }
 
 pub(crate) async fn apps_list_core(
@@ -1392,7 +1602,11 @@ mod tests {
 
         let ids: Vec<String> = messages
             .iter()
-            .filter_map(|msg| msg.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned))
+            .filter_map(|msg| {
+                msg.get("id")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned)
+            })
             .collect();
         assert_eq!(ids, vec!["msg-older", "msg-middle", "msg-newer"]);
     }
@@ -1458,5 +1672,59 @@ mod tests {
             assert!(hidden.contains("ses_bg_2"));
             assert!(!hidden.contains("ses_fg"));
         });
+    }
+
+    #[test]
+    fn review_target_to_opencode_arguments_maps_known_targets() {
+        assert_eq!(
+            review_target_to_opencode_arguments(&json!({ "type": "uncommittedChanges" }))
+                .expect("uncommitted"),
+            ""
+        );
+        assert_eq!(
+            review_target_to_opencode_arguments(&json!({
+                "type": "baseBranch",
+                "branch": "main"
+            }))
+            .expect("base branch"),
+            "main"
+        );
+        assert_eq!(
+            review_target_to_opencode_arguments(&json!({
+                "type": "commit",
+                "sha": "abc123"
+            }))
+            .expect("commit"),
+            "abc123"
+        );
+        assert_eq!(
+            review_target_to_opencode_arguments(&json!({
+                "type": "custom",
+                "instructions": "focus on tests"
+            }))
+            .expect("custom"),
+            "focus on tests"
+        );
+    }
+
+    #[test]
+    fn session_to_thread_entry_includes_parent_and_timestamps() {
+        let entry = session_to_thread_entry(&json!({
+            "id": "ses_1",
+            "title": "Example",
+            "directory": "/tmp/work",
+            "parentID": "ses_parent",
+            "time": { "created": 10, "updated": 20 }
+        }))
+        .expect("thread entry");
+
+        assert_eq!(entry.get("id").and_then(|v| v.as_str()), Some("ses_1"));
+        assert_eq!(entry.get("name").and_then(|v| v.as_str()), Some("Example"));
+        assert_eq!(
+            entry.get("parentId").and_then(|v| v.as_str()),
+            Some("ses_parent")
+        );
+        assert_eq!(entry.get("createdAt").and_then(|v| v.as_u64()), Some(10));
+        assert_eq!(entry.get("updatedAt").and_then(|v| v.as_u64()), Some(20));
     }
 }

@@ -2,17 +2,17 @@
 
 A macOS desktop app for monitoring and interacting with [OpenCode](https://github.com/sst/opencode) agents across multiple workspaces.
 
-Forked from [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by Dimillian, adapted to use OpenCode's ACP (Agent Communication Protocol) instead of the Codex app-server protocol.
+Forked from [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by Dimillian, adapted to use OpenCode's REST API + SSE backend while preserving CodexMonitor frontend event compatibility.
 
 ## Status
 
-**Active development** — ACP backend migration is live for thread/session lifecycle, event translation, and model discovery. Remaining work focuses on parity polish and UX cleanup.
+**Active development** — the REST/SSE backend is live for thread/session lifecycle, event translation, messaging, model discovery, and image attachments. Remaining work focuses on feature-parity polish and OpenCode-specific UX cleanup.
 
 ## Architecture
 
 - **Frontend**: React 19 + Vite + TypeScript
-- **Backend**: Tauri 2 (Rust) — spawns `opencode acp` child processes via stdio JSON-RPC
-- **Protocol**: OpenCode ACP v1 (nd-JSON-RPC over stdio)
+- **Backend**: Tauri 2 (Rust) — runs against `opencode serve` (HTTP REST + SSE)
+- **Protocol**: OpenCode REST API + SSE, translated in Rust to CodexMonitor-shaped frontend events
 
 ## Development
 

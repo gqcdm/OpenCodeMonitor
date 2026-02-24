@@ -29,7 +29,6 @@ import {
 import { isUnsupportedTurnSteerError } from "@threads/utils/threadRpc";
 import type { ThreadAction, ThreadState } from "./useThreadsReducer";
 import { useReviewPrompt } from "./useReviewPrompt";
-import { formatRelativeTime } from "@utils/time";
 
 type SendMessageOptions = {
   skipPromptExpansion?: boolean;
@@ -658,25 +657,6 @@ export function useThreadMessaging({
         return;
       }
 
-      const rateLimits = rateLimitsByWorkspace[activeWorkspace.id] ?? null;
-      const primaryUsed = rateLimits?.primary?.usedPercent;
-      const secondaryUsed = rateLimits?.secondary?.usedPercent;
-      const primaryReset = rateLimits?.primary?.resetsAt;
-      const secondaryReset = rateLimits?.secondary?.resetsAt;
-      const credits = rateLimits?.credits ?? null;
-
-      const normalizeReset = (value?: number | null) => {
-        if (typeof value !== "number" || !Number.isFinite(value)) {
-          return null;
-        }
-        return value > 1_000_000_000_000 ? value : value * 1000;
-      };
-
-      const resetLabel = (value?: number | null) => {
-        const resetAt = normalizeReset(value);
-        return resetAt ? formatRelativeTime(resetAt) : null;
-      };
-
       const collabId =
         collaborationMode &&
         typeof collaborationMode === "object" &&
@@ -694,30 +674,6 @@ export function useThreadMessaging({
         `- Access: ${accessMode ?? "current"}`,
         `- Collaboration: ${collabId || "off"}`,
       ];
-
-      if (typeof primaryUsed === "number") {
-        const reset = resetLabel(primaryReset);
-        lines.push(
-          `- Session usage: ${Math.round(primaryUsed)}%${
-            reset ? ` (resets ${reset})` : ""
-          }`,
-        );
-      }
-      if (typeof secondaryUsed === "number") {
-        const reset = resetLabel(secondaryReset);
-        lines.push(
-          `- Weekly usage: ${Math.round(secondaryUsed)}%${
-            reset ? ` (resets ${reset})` : ""
-          }`,
-        );
-      }
-      if (credits?.hasCredits) {
-        if (credits.unlimited) {
-          lines.push("- Credits: unlimited");
-        } else if (credits.balance) {
-          lines.push(`- Credits: ${credits.balance}`);
-        }
-      }
 
       const timestamp = Date.now();
       recordThreadActivity(activeWorkspace.id, threadId, timestamp);
