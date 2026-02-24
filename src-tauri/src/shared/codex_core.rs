@@ -985,6 +985,149 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
         .filter(|raw| !raw.is_empty())
 }
 
+fn provider_has_model(config_providers: &Value, provider_id: &str, model_id: &str) -> bool {
+    let provider_id = provider_id.trim();
+    let model_id = model_id.trim();
+    if provider_id.is_empty() || model_id.is_empty() {
+        return false;
+    }
+
+    let providers = config_providers
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    providers.iter().any(|provider| {
+        let pid = provider
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+        if pid != provider_id {
+            return false;
+        }
+        let models = provider.get("models").and_then(|v| v.as_object());
+        if let Some(models_map) = models {
+            if models_map.contains_key(model_id) {
+                return true;
+            }
+            return models_map.values().any(|model| {
+                model.get("id")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    == model_id
+            });
+        }
+        false
+    })
+}
+
+fn resolve_model_override_from_providers(config_providers: &Value, requested_model: &str) -> Option<Value> {
+    let requested = requested_model.trim();
+    if requested.is_empty() {
+        return None;
+    }
+
+    if let Some((provider_id, model_id)) = requested.split_once('/') {
+        let provider_id = provider_id.trim();
+        let model_id = model_id.trim();
+        if provider_id.is_empty() || model_id.is_empty() {
+            return None;
+        }
+        if provider_has_model(config_providers, provider_id, model_id) {
+            return Some(json!({ "providerID": provider_id, "modelID": model_id }));
+        }
+        return None;
+    }
+
+    let providers = config_providers
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut matches: Vec<String> = Vec::new();
+
+    for provider in &providers {
+        let provider_id = provider
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+        if provider_id.is_empty() {
+            continue;
+        }
+        let Some(models_map) = provider.get("models").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        let found = models_map.contains_key(requested)
+            || models_map.values().any(|model| {
+                model.get("id")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    == requested
+            });
+        if found {
+            matches.push(provider_id.to_string());
+        }
+    }
+
+    if matches.len() == 1 {
+        return Some(json!({ "providerID": matches[0], "modelID": requested }));
+    }
+
+    None
+}
+
+async fn resolve_prompt_model_override(
+    session: &WorkspaceSession,
+    requested_model: &str,
+) -> Option<Value> {
+    let requested = requested_model.trim();
+    if requested.is_empty() {
+        return None;
+    }
+
+    let has_provider = requested.contains('/');
+
+    let cached = session.models_cache.lock().await.clone();
+    if let Some(cache) = cached {
+        if let Some(model) = resolve_model_override_from_providers(&cache, requested) {
+            return Some(model);
+        }
+        // If the client sent a qualified id but it's no longer present in the
+        // current provider list, silently fall back to server default instead
+        // of sending an invalid override that yields a scary 400.
+        if has_provider {
+            return None;
+        }
+    }
+
+    // Best-effort refresh for legacy unqualified ids when cache is stale/missing.
+    if !has_provider {
+        if let Ok(fresh) = session.rest_get("/config/providers").await {
+            *session.models_cache.lock().await = Some(fresh.clone());
+            if let Some(model) = resolve_model_override_from_providers(&fresh, requested) {
+                return Some(model);
+            }
+        }
+    }
+
+    // If already qualified and no cache was available to validate it, keep the
+    // explicit override rather than dropping a likely-valid user choice.
+    if let Some((provider_id, model_id)) = requested.split_once('/') {
+        let provider_id = provider_id.trim();
+        let model_id = model_id.trim();
+        if !provider_id.is_empty() && !model_id.is_empty() {
+            return Some(json!({ "providerID": provider_id, "modelID": model_id }));
+        }
+    }
+
+    None
+}
+
 fn emit_turn_error<E: EventSink>(
     event_sink: &E,
     workspace_id: &str,
@@ -1086,12 +1229,11 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
     let requested_model = normalize_optional_string(model);
     let requested_effort = normalize_optional_string(effort);
     if let Some(ref model_id) = requested_model {
-        // REST API requires model as { providerID, modelID }.
-        // The frontend sends a qualified "provider/model" string.
-        if let Some((provider, mid)) = model_id.split_once('/') {
-            body["model"] = json!({ "providerID": provider, "modelID": mid });
-        } else {
-            body["model"] = json!({ "modelID": model_id });
+        // Be resilient to stale or legacy (unqualified) persisted selections.
+        // If we cannot safely resolve a valid `{ providerID, modelID }`, omit the
+        // override and let OpenCode use its current default model.
+        if let Some(model_override) = resolve_prompt_model_override(session.as_ref(), model_id).await {
+            body["model"] = model_override;
         }
     }
     if let Some(ref effort_level) = requested_effort {
