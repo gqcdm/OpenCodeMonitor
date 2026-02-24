@@ -5,7 +5,7 @@ import Keyboard from "lucide-react/dist/esm/icons/keyboard";
 import GitBranch from "lucide-react/dist/esm/icons/git-branch";
 import TerminalSquare from "lucide-react/dist/esm/icons/terminal-square";
 import FileText from "lucide-react/dist/esm/icons/file-text";
-import FlaskConical from "lucide-react/dist/esm/icons/flask-conical";
+// import FlaskConical from "lucide-react/dist/esm/icons/flask-conical";
 import ExternalLink from "lucide-react/dist/esm/icons/external-link";
 import Layers from "lucide-react/dist/esm/icons/layers";
 import ServerCog from "lucide-react/dist/esm/icons/server-cog";
@@ -116,6 +116,7 @@ export function SettingsNav({
         >
           Codex
         </PanelNavItem>
+        {/* Features tab hidden - no current options relevant to OpenCode
         <PanelNavItem
           className="settings-nav"
           icon={<FlaskConical aria-hidden />}
@@ -125,6 +126,7 @@ export function SettingsNav({
         >
           Features
         </PanelNavItem>
+        */}
       </PanelNavList>
     </aside>
   );

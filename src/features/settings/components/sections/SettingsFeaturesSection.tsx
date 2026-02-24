@@ -47,27 +47,6 @@ export function SettingsFeaturesSection({
       </div>
       <div className="settings-toggle-row">
         <div>
-          <div className="settings-toggle-title">Collaboration modes</div>
-          <div className="settings-toggle-subtitle">
-            Enable collaboration mode presets (Code, Plan).
-          </div>
-        </div>
-        <button
-          type="button"
-          className={`settings-toggle ${appSettings.collaborationModesEnabled ? "on" : ""}`}
-          onClick={() =>
-            void onUpdateAppSettings({
-              ...appSettings,
-              collaborationModesEnabled: !appSettings.collaborationModesEnabled,
-            })
-          }
-          aria-pressed={appSettings.collaborationModesEnabled}
-        >
-          <span className="settings-toggle-knob" />
-        </button>
-      </div>
-      <div className="settings-toggle-row">
-        <div>
           <div className="settings-toggle-title">Personality</div>
           <div className="settings-toggle-subtitle">
             Choose Codex communication style (writes top-level <code>personality</code> in
