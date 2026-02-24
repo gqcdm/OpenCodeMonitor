@@ -407,7 +407,7 @@ mod urlencoding {
 }
 
 // ---------------------------------------------------------------------------
-// PATH env and command building (unchanged from ACP)
+// PATH env and command building
 // ---------------------------------------------------------------------------
 
 pub(crate) fn build_codex_path_env(codex_bin: Option<&str>) -> Option<String> {

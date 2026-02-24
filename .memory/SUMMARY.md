@@ -8,7 +8,7 @@
 
 - **Frontend**: React 19 + Vite + TypeScript
 - **Backend**: Tauri 2 (Rust)
-- **Protocol**: Migrating from ACP (JSON-RPC over stdio) to REST API (`opencode serve`)
+- **Protocol**: REST API (`opencode serve` — HTTP + SSE)
 
 ## Architecture Invariants
 
@@ -28,7 +28,7 @@
 
 ## Current Focus
 
-- REST API migration (from `opencode acp` to `opencode serve`)
+- REST backend polish and parity
 - Thread lifecycle and event handling polish
 - Token usage tracking and session management
 

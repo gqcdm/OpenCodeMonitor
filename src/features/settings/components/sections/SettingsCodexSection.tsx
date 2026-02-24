@@ -327,7 +327,7 @@ export function SettingsCodexSection({
           </button>
         </div>
         <div className="settings-help">
-          Extra flags passed before <code>acp</code>. Use quotes for values with spaces.
+          Extra flags passed to <code>serve</code>. Use quotes for values with spaces.
         </div>
         <div className="settings-help">
           OpenCode server:{" "}
@@ -415,7 +415,7 @@ export function SettingsCodexSection({
             </div>
             <div className="settings-doctor-body">
               <div>Version: {doctorState.result.version ?? "unknown"}</div>
-              <div>ACP command: {doctorState.result.appServerOk ? "ok" : "failed"}</div>
+              <div>Server: {doctorState.result.appServerOk ? "ok" : "failed"}</div>
               <div>
                 Node:{" "}
                 {doctorState.result.nodeOk

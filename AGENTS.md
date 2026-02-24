@@ -9,7 +9,7 @@ Detailed navigation/runbooks live in:
 
 - `docs/codebase-map.md` (task-oriented file map: "if you need X, edit Y")
 - `README.md` (setup, build, release, and broader project docs)
-- `docs/shaping/rest-api-migration.md` (architecture decision: ACP to REST API migration)
+- `docs/shaping/rest-api-migration.md` (REST backend architecture and parity status)
 
 ## Project Purpose
 
@@ -29,17 +29,15 @@ We pull upstream CodexMonitor changes regularly (weekly/monthly). The fork's tra
 
 The frontend thread reducer receives events in the **same shape** as original CodexMonitor. All OpenCode-to-CodexMonitor translation happens in Rust, never in the frontend.
 
-### Backend: Migrating from ACP to REST API
+### Backend: REST API
 
-The backend is migrating from `opencode acp` (JSON-RPC over stdio) to `opencode serve` (HTTP REST + SSE). See `docs/shaping/rest-api-migration.md` for the full rationale, requirements, and implementation slices.
-
-The migration touches three files — the same three already diverged from upstream:
+The backend uses `opencode serve` (HTTP REST + SSE). The translation layer is isolated to three Rust files so frontend merges stay clean:
 
 - `src-tauri/src/backend/event_translator.rs` — protocol events to CodexMonitor event shapes
 - `src-tauri/src/shared/codex_core.rs` — all protocol methods
 - `src-tauri/src/backend/app_server.rs` — process spawn, event routing
 
-Internal Rust module paths (`codex_core.rs`, `codex/mod.rs`, etc.) are **not renamed** — only user-facing strings. This minimizes merge conflicts with upstream.
+Internal Rust module paths (`codex_core.rs`, `codex/mod.rs`, etc.) are **not renamed** — only user-facing strings. This minimizes merge conflicts with upstream. (The original CodexMonitor used Codex CLI; this fork uses OpenCode REST instead.)
 
 ## Non-Negotiable Architecture Rules
 
@@ -178,7 +176,7 @@ Use extra care in high-churn/high-complexity files:
 
 - Task-oriented code map: `docs/codebase-map.md`
 - Setup/build/release/test commands: `README.md`
-- Architecture decision (ACP to REST migration): `docs/shaping/rest-api-migration.md`
+- REST backend architecture: `docs/shaping/rest-api-migration.md`
 - Frontend event contract: `docs/app-server-events.md`
 - For OpenCode API/feature changes, refer to `opencode-server-api.mdx` and `./tmp/opencode` before implementing protocol or behavior updates.
 

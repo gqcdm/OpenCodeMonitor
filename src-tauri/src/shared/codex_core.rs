@@ -903,7 +903,7 @@ pub(crate) async fn set_thread_name_core(
 }
 
 // ---------------------------------------------------------------------------
-// Image handling (kept from ACP — same logic)
+// Image handling
 // ---------------------------------------------------------------------------
 
 const URL_IMAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -911,8 +911,7 @@ const URL_IMAGE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// Build REST prompt parts from frontend input.
 ///
-/// REST uses `{ type: "file", mime, url: "data:...", filename }` for images
-/// instead of ACP's `{ type: "image", mimeType, data }`.
+/// REST uses `{ type: "file", mime, url: "data:...", filename }` for images.
 async fn build_rest_prompt_parts(
     text: String,
     images: Option<Vec<String>>,
