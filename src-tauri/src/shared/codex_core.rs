@@ -238,6 +238,103 @@ fn review_target_to_opencode_arguments(target: &Value) -> Result<String, String>
     }
 }
 
+fn collaboration_agent_name_from_payload(collaboration_mode: Option<&Value>) -> Option<String> {
+    collaboration_mode
+        .and_then(|value| value.as_object())
+        .and_then(|obj| obj.get("mode"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn collaboration_mode_entry_from_agent(agent: &Value) -> Option<Value> {
+    let name = agent
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    let hidden = agent
+        .get("hidden")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if hidden {
+        return None;
+    }
+
+    let description = agent
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let label = {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            None => name.clone(),
+        }
+    };
+
+    Some(json!({
+        "name": name,
+        "label": label,
+        "mode": name,
+        "description": description,
+        "settings": {},
+    }))
+}
+
+fn resume_thread_result_thread(thread_id: &str, session_details: Option<&Value>) -> Value {
+    if let Some(details) = session_details.and_then(session_to_thread_entry) {
+        return details;
+    }
+    json!({ "id": thread_id })
+}
+
+fn replay_collab_prompt_from_raw_input(raw_input: Option<&Value>) -> String {
+    raw_input
+        .and_then(|inp| inp.get("description"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            raw_input
+                .and_then(|inp| inp.get("prompt"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+fn replay_collab_agent_status(item_status: &str, raw_input: Option<&Value>) -> Option<Value> {
+    let agent = raw_input
+        .and_then(|inp| inp.get("subagent_type"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+
+    let agent_status = match item_status {
+        "in_progress" => "running",
+        "completed" => "completed",
+        "failed" => "failed",
+        _ => "unknown",
+    };
+
+    let mut agent_map = serde_json::Map::new();
+    agent_map.insert(agent, json!({ "status": agent_status }));
+    Some(Value::Object(agent_map))
+}
+
 // ---------------------------------------------------------------------------
 // Thread / session lifecycle (REST)
 // ---------------------------------------------------------------------------
@@ -273,6 +370,11 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
     event_sink: &E,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
+
+    let session_details = session
+        .rest_get(&format!("/session/{thread_id}"))
+        .await
+        .ok();
 
     let path = format!("/session/{thread_id}/message");
     let messages = session.rest_get(&path).await?;
@@ -334,10 +436,13 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
             }
 
             if !content_parts.is_empty() {
-                replay_item_counter += 1;
-                let item_id = format!("replay_item_{replay_item_counter}");
-
                 if role == "user" {
+                    // Reuse the translator's stable per-session ID so the
+                    // frontend merges with any live-SSE-emitted user message.
+                    let item_id = {
+                        let mut ts = session.translation_state.lock().await;
+                        ts.user_message_item(&thread_id)
+                    };
                     event_sink.emit_app_server_event(AppServerEvent {
                         workspace_id: workspace_id.clone(),
                         message: json!({
@@ -353,7 +458,8 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
                         }),
                     });
                 } else {
-                    // Frontend reads `item.text` via onAgentMessageCompleted path.
+                    replay_item_counter += 1;
+                    let item_id = format!("replay_item_{replay_item_counter}");
                     let full_text = text_fragments.join("\n\n");
                     event_sink.emit_app_server_event(AppServerEvent {
                         workspace_id: workspace_id.clone(),
@@ -416,6 +522,7 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
 
                 let item = replay_build_tool_item(
                     &item_id,
+                    &thread_id,
                     item_type,
                     tool_name,
                     final_status,
@@ -460,7 +567,7 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
 
     Ok(json!({
         "result": {
-            "thread": { "id": thread_id }
+            "thread": resume_thread_result_thread(&thread_id, session_details.as_ref())
         }
     }))
 }
@@ -469,12 +576,14 @@ fn replay_tool_kind_to_item_type(tool_name: &str) -> &str {
     match tool_name {
         "edit" | "write" | "create" => "fileChange",
         "bash" | "command" | "terminal" => "commandExecution",
+        "task" => "collabToolCall",
         _ => "commandExecution",
     }
 }
 
 fn replay_build_tool_item(
     item_id: &str,
+    thread_id: &str,
     item_type: &str,
     tool_name: &str,
     status: &str,
@@ -487,7 +596,17 @@ fn replay_build_tool_item(
         "status": status
     });
 
-    if item_type == "commandExecution" {
+    if item_type == "collabToolCall" {
+        item["tool"] = json!(tool_name);
+        item["senderThreadId"] = json!(thread_id);
+        let prompt = replay_collab_prompt_from_raw_input(raw_input);
+        if !prompt.is_empty() {
+            item["prompt"] = json!(prompt);
+        }
+        if let Some(agent_status) = replay_collab_agent_status(status, raw_input) {
+            item["agentStatus"] = agent_status;
+        }
+    } else if item_type == "commandExecution" {
         let command = raw_input
             .and_then(|inp| {
                 inp.get("command")
@@ -1013,7 +1132,8 @@ fn provider_has_model(config_providers: &Value, provider_id: &str, model_id: &st
                 return true;
             }
             return models_map.values().any(|model| {
-                model.get("id")
+                model
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .map(str::trim)
                     .unwrap_or_default()
@@ -1024,7 +1144,10 @@ fn provider_has_model(config_providers: &Value, provider_id: &str, model_id: &st
     })
 }
 
-fn resolve_model_override_from_providers(config_providers: &Value, requested_model: &str) -> Option<Value> {
+fn resolve_model_override_from_providers(
+    config_providers: &Value,
+    requested_model: &str,
+) -> Option<Value> {
     let requested = requested_model.trim();
     if requested.is_empty() {
         return None;
@@ -1063,7 +1186,8 @@ fn resolve_model_override_from_providers(config_providers: &Value, requested_mod
         };
         let found = models_map.contains_key(requested)
             || models_map.values().any(|model| {
-                model.get("id")
+                model
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .map(str::trim)
                     .unwrap_or_default()
@@ -1167,7 +1291,7 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
     _access_mode: Option<String>,
     images: Option<Vec<String>>,
     app_mentions: Option<Vec<Value>>,
-    _collaboration_mode: Option<Value>,
+    collaboration_mode: Option<Value>,
     event_sink: &E,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
@@ -1191,7 +1315,9 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
         message: started_msg,
     });
 
-    // Emit synthetic user message item.
+    // Emit synthetic user message item using the translator's stable ID so that
+    // the later SSE-driven emission (from translate_part_updated) merges by ID
+    // instead of creating a duplicate.
     if !user_text.is_empty() || !user_images.is_empty() {
         let mut content_parts: Vec<Value> = Vec::new();
         if !user_text.is_empty() {
@@ -1205,6 +1331,10 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
             content_parts.push(json!({ "type": "image", "value": trimmed }));
         }
         if !content_parts.is_empty() {
+            let user_item_id = {
+                let mut ts = session.translation_state.lock().await;
+                ts.user_message_item(&thread_id)
+            };
             event_sink.emit_app_server_event(AppServerEvent {
                 workspace_id: workspace_id.clone(),
                 message: json!({
@@ -1212,7 +1342,7 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
                     "params": {
                         "threadId": thread_id,
                         "item": {
-                            "id": format!("item_user_{turn_id}"),
+                            "id": user_item_id,
                             "type": "userMessage",
                             "content": content_parts
                         }
@@ -1232,12 +1362,17 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
         // Be resilient to stale or legacy (unqualified) persisted selections.
         // If we cannot safely resolve a valid `{ providerID, modelID }`, omit the
         // override and let OpenCode use its current default model.
-        if let Some(model_override) = resolve_prompt_model_override(session.as_ref(), model_id).await {
+        if let Some(model_override) =
+            resolve_prompt_model_override(session.as_ref(), model_id).await
+        {
             body["model"] = model_override;
         }
     }
     if let Some(ref effort_level) = requested_effort {
         body["effort"] = json!(effort_level);
+    }
+    if let Some(agent_name) = collaboration_agent_name_from_payload(collaboration_mode.as_ref()) {
+        body["agent"] = json!(agent_name);
     }
 
     // Fire-and-forget: POST /session/:id/prompt_async → 204.
@@ -1298,59 +1433,10 @@ pub(crate) async fn collaboration_mode_list_core(
 
     let agent_list = agents.as_array().cloned().unwrap_or_default();
 
-    let mut data: Vec<Value> = Vec::new();
-    for agent in &agent_list {
-        let name = agent
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if name.is_empty() {
-            continue;
-        }
-
-        // Skip hidden agents (compaction, title, summary).
-        let hidden = agent
-            .get("hidden")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if hidden {
-            continue;
-        }
-
-        // Skip subagents (explore, general) -- only show primary/all.
-        let agent_mode = agent
-            .get("mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("primary");
-        if agent_mode == "subagent" {
-            continue;
-        }
-
-        let description = agent
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        // Capitalize first letter for display label.
-        let label = {
-            let mut chars = name.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => name.clone(),
-            }
-        };
-
-        data.push(json!({
-            "name": name,
-            "label": label,
-            "mode": name,
-            "description": description,
-            "settings": {},
-        }));
-    }
+    let data: Vec<Value> = agent_list
+        .iter()
+        .filter_map(collaboration_mode_entry_from_agent)
+        .collect();
 
     Ok(json!({ "result": { "data": data } }))
 }
@@ -1868,5 +1954,85 @@ mod tests {
         );
         assert_eq!(entry.get("createdAt").and_then(|v| v.as_u64()), Some(10));
         assert_eq!(entry.get("updatedAt").and_then(|v| v.as_u64()), Some(20));
+    }
+
+    #[test]
+    fn collaboration_agent_name_from_payload_reads_mode_string() {
+        let agent = collaboration_agent_name_from_payload(Some(&json!({
+            "mode": "explore",
+            "settings": {}
+        })));
+        assert_eq!(agent.as_deref(), Some("explore"));
+    }
+
+    #[test]
+    fn collaboration_agent_name_from_payload_ignores_missing_or_empty_mode() {
+        assert_eq!(
+            collaboration_agent_name_from_payload(Some(&json!({ "settings": {} }))),
+            None
+        );
+        assert_eq!(
+            collaboration_agent_name_from_payload(Some(&json!({ "mode": "   " }))),
+            None
+        );
+    }
+
+    #[test]
+    fn collaboration_mode_entry_from_agent_includes_subagent_and_skips_hidden() {
+        let subagent = collaboration_mode_entry_from_agent(&json!({
+            "name": "explore",
+            "mode": "subagent",
+            "hidden": false,
+            "description": "Explore-only agent"
+        }))
+        .expect("subagent should be included");
+        assert_eq!(subagent["mode"], "explore");
+        assert_eq!(subagent["label"], "Explore");
+
+        let hidden = collaboration_mode_entry_from_agent(&json!({
+            "name": "summary",
+            "mode": "subagent",
+            "hidden": true
+        }));
+        assert!(hidden.is_none());
+    }
+
+    #[test]
+    fn replay_task_tool_maps_to_collab_tool_call_item() {
+        assert_eq!(replay_tool_kind_to_item_type("task"), "collabToolCall");
+        let item = replay_build_tool_item(
+            "replay_item_1",
+            "ses_parent",
+            "collabToolCall",
+            "task",
+            "completed",
+            Some(&json!({
+                "description": "Explore the codebase",
+                "prompt": "fallback prompt",
+                "subagent_type": "explore"
+            })),
+            "",
+        );
+        assert_eq!(item["type"], "collabToolCall");
+        assert_eq!(item["senderThreadId"], "ses_parent");
+        assert_eq!(item["prompt"], "Explore the codebase");
+        assert_eq!(item["agentStatus"]["explore"]["status"], "completed");
+    }
+
+    #[test]
+    fn resume_thread_result_thread_includes_parent_from_session_details() {
+        let thread = resume_thread_result_thread(
+            "ses_child",
+            Some(&json!({
+                "id": "ses_child",
+                "title": "Child",
+                "directory": "/tmp/ws",
+                "parentID": "ses_parent",
+                "time": { "created": 1, "updated": 2 }
+            })),
+        );
+        assert_eq!(thread["id"], "ses_child");
+        assert_eq!(thread["parentId"], "ses_parent");
+        assert_eq!(thread["preview"], "Child");
     }
 }

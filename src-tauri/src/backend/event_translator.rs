@@ -26,6 +26,10 @@ struct PerSessionTurnState {
     reasoning_item_id: Option<String>,
     /// OpenCode part ID for the current reasoning part (used to route `message.part.delta` events).
     reasoning_part_id: Option<String>,
+    /// Stable item ID for the current user-message being assembled from SSE chunks.
+    user_message_item_id: Option<String>,
+    /// Buffered text for the current user-message being assembled from SSE chunks.
+    user_message_text: String,
 }
 
 /// Per-workspace state the translator needs to synthesize IDs the frontend
@@ -45,10 +49,6 @@ pub(crate) struct SessionTranslationState {
     /// Tracks OpenCode message roles by message ID to avoid routing user text
     /// parts into assistant message deltas.
     message_roles: HashMap<String, String>,
-    /// Stable item ID for contiguous user-message chunk streams.
-    pub(crate) user_message_item_id: Option<String>,
-    /// Buffered text for contiguous user-message chunk streams.
-    pub(crate) user_message_text: String,
     /// Model context windows keyed by `providerID/modelID`.
     model_context_windows: HashMap<String, u64>,
 }
@@ -60,8 +60,6 @@ impl SessionTranslationState {
             session_turns: HashMap::new(),
             item_counter: AtomicU64::new(1),
             message_roles: HashMap::new(),
-            user_message_item_id: None,
-            user_message_text: String::new(),
             model_context_windows: HashMap::new(),
         }
     }
@@ -124,8 +122,8 @@ impl SessionTranslationState {
         turn_state.agent_message_item_id = None;
         turn_state.reasoning_item_id = None;
         turn_state.reasoning_part_id = None;
-        self.user_message_item_id = None;
-        self.user_message_text.clear();
+        turn_state.user_message_item_id = None;
+        turn_state.user_message_text.clear();
     }
 
     /// Prepare translation state for replaying historical messages.
@@ -137,9 +135,10 @@ impl SessionTranslationState {
             turn_state.agent_message_item_id = None;
             turn_state.reasoning_item_id = None;
             turn_state.reasoning_part_id = None;
+            // Preserve user_message_item_id so replay reuses the same ID
+            // the live SSE translator already emitted (prevents duplicates).
+            turn_state.user_message_text.clear();
         }
-        self.user_message_item_id = None;
-        self.user_message_text.clear();
     }
 
     fn get_turn_state(&self, session_id: &str) -> Option<&PerSessionTurnState> {
@@ -206,17 +205,19 @@ impl SessionTranslationState {
             turn_state.agent_message_part_id = None;
             turn_state.reasoning_item_id = None;
             turn_state.reasoning_part_id = None;
+            turn_state.user_message_item_id = None;
+            turn_state.user_message_text.clear();
         }
-        self.user_message_item_id = None;
-        self.user_message_text.clear();
     }
 
-    pub(crate) fn user_message_item(&mut self) -> String {
-        if let Some(ref id) = self.user_message_item_id {
+    pub(crate) fn user_message_item(&mut self, session_id: &str) -> String {
+        let turn_state = self.get_turn_state_mut(session_id);
+        if let Some(ref id) = turn_state.user_message_item_id {
             id.clone()
         } else {
             let id = self.next_item_id();
-            self.user_message_item_id = Some(id.clone());
+            let turn_state = self.get_turn_state_mut(session_id);
+            turn_state.user_message_item_id = Some(id.clone());
             id
         }
     }
@@ -531,7 +532,39 @@ fn translate_part_updated(properties: &Value, state: &mut SessionTranslationStat
     match part_type {
         "text" => {
             if state.is_user_message_id(part_message_id) {
-                return vec![];
+                // Emit a userMessage item so the prompt is visible immediately
+                // (particularly important for subagent sessions whose prompts
+                // aren't injected by send_user_message_core).
+                let effective_text = if delta.is_empty() {
+                    part.get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                } else {
+                    delta
+                };
+                if effective_text.is_empty() {
+                    return vec![];
+                }
+                state
+                    .get_turn_state_mut(&thread_id)
+                    .user_message_text
+                    .push_str(effective_text);
+                let item_id = state.user_message_item(&thread_id);
+                let full_text = state
+                    .get_turn_state(&thread_id)
+                    .map(|ts| ts.user_message_text.clone())
+                    .unwrap_or_default();
+                return vec![json!({
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": thread_id,
+                        "item": {
+                            "id": item_id,
+                            "type": "userMessage",
+                            "content": [{ "type": "text", "text": full_text }]
+                        }
+                    }
+                })];
             }
             if let Some(pid) = part.get("id").and_then(|v| v.as_str()) {
                 let turn_state = state.get_turn_state_mut(&thread_id);
@@ -677,7 +710,26 @@ fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState)
     match field {
         "text" => {
             if state.is_user_message_id(message_id) {
-                return vec![];
+                state
+                    .get_turn_state_mut(&thread_id)
+                    .user_message_text
+                    .push_str(delta);
+                let item_id = state.user_message_item(&thread_id);
+                let full_text = state
+                    .get_turn_state(&thread_id)
+                    .map(|ts| ts.user_message_text.clone())
+                    .unwrap_or_default();
+                return vec![json!({
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": thread_id,
+                        "item": {
+                            "id": item_id,
+                            "type": "userMessage",
+                            "content": [{ "type": "text", "text": full_text }]
+                        }
+                    }
+                })];
             }
             let part_id = properties
                 .get("partID")
@@ -766,6 +818,33 @@ fn translate_tool_part(
         .unwrap_or("");
 
     let mut events = Vec::new();
+
+    if tool_name == "task" {
+        let collab_status = match status {
+            "pending" | "running" => "in_progress",
+            "completed" => "completed",
+            "error" => "failed",
+            _ => "in_progress",
+        };
+        let item =
+            build_task_collab_tool_item(&item_id, collab_status, raw_input.as_ref(), thread_id);
+        let method = match status {
+            "pending" | "running" => "item/started",
+            "completed" | "error" => "item/completed",
+            _ => "item/started",
+        };
+        events.push(json!({
+            "method": method,
+            "params": {
+                "threadId": thread_id,
+                "item": item
+            }
+        }));
+        if status == "completed" || status == "error" {
+            state.reset_agent_message_item(thread_id);
+        }
+        return events;
+    }
 
     // Handle explore-type tools (read, grep, glob, list) specially
     if item_type == "explore" {
@@ -958,6 +1037,67 @@ fn build_explore_entry(tool_name: &str, title: &str, raw_input: Option<&Value>) 
         entry["detail"] = json!(d);
     }
     entry
+}
+
+fn task_collab_prompt(raw_input: Option<&Value>) -> String {
+    raw_input
+        .and_then(|input| input.get("description"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            raw_input
+                .and_then(|input| input.get("prompt"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+fn task_collab_agent_status_map(item_status: &str, raw_input: Option<&Value>) -> Option<Value> {
+    let agent_name = raw_input
+        .and_then(|input| input.get("subagent_type"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+
+    let status = match item_status {
+        "in_progress" => "running",
+        "completed" => "completed",
+        "failed" => "failed",
+        _ => "unknown",
+    };
+
+    let mut map = serde_json::Map::new();
+    map.insert(agent_name, json!({ "status": status }));
+    Some(Value::Object(map))
+}
+
+fn build_task_collab_tool_item(
+    item_id: &str,
+    status: &str,
+    raw_input: Option<&Value>,
+    thread_id: &str,
+) -> Value {
+    let mut item = json!({
+        "id": item_id,
+        "type": "collabToolCall",
+        "tool": "task",
+        "status": status,
+        "senderThreadId": thread_id,
+    });
+    let prompt = task_collab_prompt(raw_input);
+    if !prompt.is_empty() {
+        item["prompt"] = json!(prompt);
+    }
+    if let Some(agent_status) = task_collab_agent_status_map(status, raw_input) {
+        item["agentStatus"] = agent_status;
+    }
+    item
 }
 
 // ---------------------------------------------------------------------------
@@ -2127,6 +2267,132 @@ mod tests {
     }
 
     #[test]
+    fn user_text_part_updated_emits_user_message_item() {
+        let mut state = make_state();
+
+        let message_updated = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "id": "msg_user_1",
+                    "sessionID": "ses_test123",
+                    "role": "user"
+                }
+            }
+        });
+        let _ = translate_sse_event(&message_updated, &mut state);
+
+        let part_updated = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "prt_user_text_1",
+                    "sessionID": "ses_test123",
+                    "messageID": "msg_user_1",
+                    "text": "User prompt text"
+                }
+            }
+        });
+        let events = translate_sse_event(&part_updated, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/completed");
+        assert_eq!(events[0]["params"]["item"]["type"], "userMessage");
+        assert_eq!(
+            events[0]["params"]["item"]["content"][0]["text"],
+            "User prompt text"
+        );
+    }
+
+    #[test]
+    fn user_text_part_delta_emits_user_message_item() {
+        let mut state = make_state();
+
+        let message_updated = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "id": "msg_user_1",
+                    "sessionID": "ses_test123",
+                    "role": "user"
+                }
+            }
+        });
+        let _ = translate_sse_event(&message_updated, &mut state);
+
+        let part_delta = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_user_1",
+                "partID": "prt_user_text_1",
+                "field": "text",
+                "delta": "User prompt text"
+            }
+        });
+        let events = translate_sse_event(&part_delta, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/completed");
+        assert_eq!(events[0]["params"]["item"]["type"], "userMessage");
+        assert_eq!(
+            events[0]["params"]["item"]["content"][0]["text"],
+            "User prompt text"
+        );
+    }
+
+    #[test]
+    fn user_text_accumulates_across_deltas() {
+        let mut state = make_state();
+
+        let message_updated = json!({
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "id": "msg_user_1",
+                    "sessionID": "ses_test123",
+                    "role": "user"
+                }
+            }
+        });
+        let _ = translate_sse_event(&message_updated, &mut state);
+
+        let delta1 = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_user_1",
+                "partID": "prt_user_text_1",
+                "field": "text",
+                "delta": "Hello "
+            }
+        });
+        let events1 = translate_sse_event(&delta1, &mut state);
+        assert_eq!(events1[0]["params"]["item"]["content"][0]["text"], "Hello ");
+
+        let delta2 = json!({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "ses_test123",
+                "messageID": "msg_user_1",
+                "partID": "prt_user_text_1",
+                "field": "text",
+                "delta": "world"
+            }
+        });
+        let events2 = translate_sse_event(&delta2, &mut state);
+        assert_eq!(
+            events2[0]["params"]["item"]["content"][0]["text"],
+            "Hello world"
+        );
+
+        // Both emissions use the same stable item ID
+        assert_eq!(
+            events1[0]["params"]["item"]["id"],
+            events2[0]["params"]["item"]["id"]
+        );
+    }
+
+    #[test]
     fn user_text_part_updated_does_not_produce_agent_message_delta() {
         let mut state = make_state();
 
@@ -2155,37 +2421,140 @@ mod tests {
             }
         });
         let events = translate_sse_event(&part_updated, &mut state);
-        assert!(events.is_empty());
+        // Should produce a userMessage item, NOT an agentMessage delta
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/completed");
+        assert_ne!(events[0]["method"], "item/agentMessage/delta");
     }
 
     #[test]
-    fn user_text_part_delta_does_not_produce_agent_message_delta() {
-        let mut state = make_state();
+    fn concurrent_sessions_isolate_user_message_text() {
+        let mut state = SessionTranslationState::new(String::new());
 
-        let message_updated = json!({
-            "type": "message.updated",
-            "properties": {
-                "info": {
-                    "id": "msg_user_1",
-                    "sessionID": "ses_test123",
-                    "role": "user"
+        // Parent session: register user message role
+        let _ = translate_sse_event(
+            &json!({
+                "type": "message.updated",
+                "properties": {
+                    "info": { "id": "msg_parent_user", "sessionID": "ses_parent", "role": "user" }
                 }
-            }
-        });
-        let _ = translate_sse_event(&message_updated, &mut state);
+            }),
+            &mut state,
+        );
 
-        let part_delta = json!({
-            "type": "message.part.delta",
-            "properties": {
-                "sessionID": "ses_test123",
-                "messageID": "msg_user_1",
-                "partID": "prt_user_text_1",
-                "field": "text",
-                "delta": "User prompt text"
-            }
-        });
-        let events = translate_sse_event(&part_delta, &mut state);
-        assert!(events.is_empty());
+        // Parent session: user text arrives
+        let parent_events = translate_sse_event(
+            &json!({
+                "type": "message.part.updated",
+                "properties": {
+                    "part": {
+                        "type": "text",
+                        "id": "prt_parent_text",
+                        "sessionID": "ses_parent",
+                        "messageID": "msg_parent_user",
+                        "text": "spin up an explore subagent"
+                    }
+                }
+            }),
+            &mut state,
+        );
+        assert_eq!(parent_events.len(), 1);
+        assert_eq!(
+            parent_events[0]["params"]["item"]["content"][0]["text"],
+            "spin up an explore subagent"
+        );
+
+        // Subagent session created
+        let _ = translate_sse_event(
+            &json!({
+                "type": "session.created",
+                "properties": {
+                    "session": {
+                        "id": "ses_child",
+                        "title": "Explore subagent",
+                        "parentID": "ses_parent"
+                    }
+                }
+            }),
+            &mut state,
+        );
+
+        // Subagent session: register user message role
+        let _ = translate_sse_event(
+            &json!({
+                "type": "message.updated",
+                "properties": {
+                    "info": { "id": "msg_child_user", "sessionID": "ses_child", "role": "user" }
+                }
+            }),
+            &mut state,
+        );
+
+        // Subagent session: user text arrives — must NOT include parent's text
+        let child_events = translate_sse_event(
+            &json!({
+                "type": "message.part.updated",
+                "properties": {
+                    "part": {
+                        "type": "text",
+                        "id": "prt_child_text",
+                        "sessionID": "ses_child",
+                        "messageID": "msg_child_user",
+                        "text": "Explore the codebase"
+                    }
+                }
+            }),
+            &mut state,
+        );
+        assert_eq!(child_events.len(), 1);
+        assert_eq!(
+            child_events[0]["params"]["item"]["content"][0]["text"],
+            "Explore the codebase"
+        );
+        assert_eq!(child_events[0]["params"]["threadId"], "ses_child");
+
+        // Verify parent and child use different item IDs
+        assert_ne!(
+            parent_events[0]["params"]["item"]["id"],
+            child_events[0]["params"]["item"]["id"]
+        );
+    }
+
+    #[test]
+    fn prepare_replay_preserves_user_message_item_id() {
+        let mut state = SessionTranslationState::new(String::new());
+
+        // Simulate live SSE: register user role and emit user text
+        let _ = translate_sse_event(
+            &json!({
+                "type": "message.updated",
+                "properties": {
+                    "info": { "id": "msg_u1", "sessionID": "ses_sub", "role": "user" }
+                }
+            }),
+            &mut state,
+        );
+        let live_events = translate_sse_event(
+            &json!({
+                "type": "message.part.updated",
+                "properties": {
+                    "part": {
+                        "type": "text",
+                        "id": "prt_u1",
+                        "sessionID": "ses_sub",
+                        "messageID": "msg_u1",
+                        "text": "subagent prompt"
+                    }
+                }
+            }),
+            &mut state,
+        );
+        let live_id = live_events[0]["params"]["item"]["id"].as_str().unwrap();
+
+        // prepare_replay should preserve the user_message_item_id
+        state.prepare_replay("ses_sub".into());
+        let replay_id = state.user_message_item("ses_sub");
+        assert_eq!(replay_id, live_id, "replay must reuse the live SSE item ID");
     }
 
     #[test]
@@ -2532,6 +2901,123 @@ mod tests {
         let entries = item["entries"].as_array().unwrap();
         assert_eq!(entries[0]["kind"], "search");
         assert_eq!(entries[0]["label"], "useState in src");
+    }
+
+    #[test]
+    fn task_tool_running_produces_collab_tool_call_started() {
+        let mut state = make_state();
+        let event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_task_1",
+                    "sessionID": "ses_test123",
+                    "tool": "task",
+                    "state": {
+                        "status": "running",
+                        "input": {
+                            "description": "Explore the codebase",
+                            "prompt": "fallback prompt",
+                            "subagent_type": "explore"
+                        }
+                    }
+                }
+            }
+        });
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/started");
+        let item = &events[0]["params"]["item"];
+        assert_eq!(item["type"], "collabToolCall");
+        assert_eq!(item["tool"], "task");
+        assert_eq!(item["status"], "in_progress");
+        assert_eq!(item["senderThreadId"], "ses_test123");
+        assert_eq!(item["prompt"], "Explore the codebase");
+        assert_eq!(item["agentStatus"]["explore"]["status"], "running");
+    }
+
+    #[test]
+    fn task_tool_lifecycle_reuses_item_id_and_maps_completion_statuses() {
+        let mut state = make_state();
+        let running = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_task_2",
+                    "sessionID": "ses_test123",
+                    "tool": "task",
+                    "state": {
+                        "status": "running",
+                        "input": { "subagent_type": "general", "prompt": "Do work" }
+                    }
+                }
+            }
+        });
+        let completed = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_task_2",
+                    "sessionID": "ses_test123",
+                    "tool": "task",
+                    "state": {
+                        "status": "completed",
+                        "input": { "subagent_type": "general", "prompt": "Do work" }
+                    }
+                }
+            }
+        });
+        let running_events = translate_sse_event(&running, &mut state);
+        let completed_events = translate_sse_event(&completed, &mut state);
+        assert_eq!(running_events.len(), 1);
+        assert_eq!(completed_events.len(), 1);
+        assert_eq!(completed_events[0]["method"], "item/completed");
+        assert_eq!(
+            completed_events[0]["params"]["item"]["type"],
+            "collabToolCall"
+        );
+        assert_eq!(completed_events[0]["params"]["item"]["status"], "completed");
+        assert_eq!(
+            running_events[0]["params"]["item"]["id"],
+            completed_events[0]["params"]["item"]["id"]
+        );
+        assert_eq!(
+            completed_events[0]["params"]["item"]["agentStatus"]["general"]["status"],
+            "completed"
+        );
+    }
+
+    #[test]
+    fn task_tool_error_produces_failed_collab_tool_call() {
+        let mut state = make_state();
+        let error_event = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_task_3",
+                    "sessionID": "ses_test123",
+                    "tool": "task",
+                    "state": {
+                        "status": "error",
+                        "input": { "description": "Try something", "subagent_type": "explore" },
+                        "output": "failed"
+                    }
+                }
+            }
+        });
+        let events = translate_sse_event(&error_event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "item/completed");
+        assert_eq!(events[0]["params"]["item"]["type"], "collabToolCall");
+        assert_eq!(events[0]["params"]["item"]["status"], "failed");
+        assert_eq!(
+            events[0]["params"]["item"]["agentStatus"]["explore"]["status"],
+            "failed"
+        );
     }
 
     #[test]

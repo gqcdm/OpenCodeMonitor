@@ -349,6 +349,27 @@ describe("useThreadActions", () => {
     expect(updateThreadParent).toHaveBeenCalledWith("parent-thread", ["child-thread"]);
   });
 
+  it("links resumed thread to its parent from direct parentId fallback", async () => {
+    vi.mocked(resumeThread).mockResolvedValue({
+      result: {
+        thread: {
+          id: "child-thread",
+          parentId: "parent-thread",
+        },
+      },
+    });
+    vi.mocked(buildItemsFromThread).mockReturnValue([]);
+    vi.mocked(isReviewingFromThread).mockReturnValue(false);
+
+    const { result, updateThreadParent } = renderActions();
+
+    await act(async () => {
+      await result.current.resumeThreadForWorkspace("ws-1", "child-thread", true);
+    });
+
+    expect(updateThreadParent).toHaveBeenCalledWith("parent-thread", ["child-thread"]);
+  });
+
   it("does not hydrate status from resume when local items are preserved", async () => {
     const localItem: ConversationItem = {
       id: "local-assistant-1",

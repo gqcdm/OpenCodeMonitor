@@ -203,8 +203,11 @@ export function useThreadActions({
           dispatch({ type: "ensureThread", workspaceId, threadId });
           applyCollabThreadLinksFromThread(threadId, thread);
           const sourceParentId = getParentThreadIdFromSource(thread.source);
-          if (sourceParentId) {
-            updateThreadParent(sourceParentId, [threadId]);
+          const directParentId =
+            asString(thread.parentId ?? thread.parent_id ?? "").trim() || null;
+          const resolvedParentId = sourceParentId ?? directParentId;
+          if (resolvedParentId) {
+            updateThreadParent(resolvedParentId, [threadId]);
           }
           const items = buildItemsFromThread(thread);
           const localItems = itemsByThread[threadId] ?? [];
