@@ -71,7 +71,18 @@ describe("useComposerAutocompleteState file mentions", () => {
 });
 
 describe("useComposerAutocompleteState slash commands", () => {
-  it("includes built-in slash commands in alphabetical order when apps are enabled", () => {
+  const slashCommands = [
+    { name: "review", description: "Start a review" },
+    { name: "compact", description: "Compact context" },
+    { name: "mcp", description: "MCP tools" },
+    { name: "resume", description: "Resume session" },
+    { name: "fork", description: "Fork thread" },
+    { name: "status", description: "Status" },
+    { name: "new", description: "New thread" },
+    { name: "apps", description: "Apps" },
+  ];
+
+  it("renders OpenCode slash commands in alphabetical order", () => {
     const text = "/";
     const selectionStart = text.length;
     const textareaRef = createRef<HTMLTextAreaElement>();
@@ -86,6 +97,7 @@ describe("useComposerAutocompleteState slash commands", () => {
         selectionStart,
         disabled: false,
         appsEnabled: true,
+        slashCommands,
         skills: [],
         apps: [],
         prompts: [],
@@ -97,18 +109,6 @@ describe("useComposerAutocompleteState slash commands", () => {
     );
 
     const labels = result.current.autocompleteMatches.map((item) => item.label);
-    expect(labels).toEqual(
-      expect.arrayContaining([
-        "apps",
-        "compact",
-        "fork",
-        "mcp",
-        "new",
-        "resume",
-        "review",
-        "status",
-      ]),
-    );
     expect(labels.slice(0, 8)).toEqual([
       "apps",
       "compact",
@@ -121,7 +121,7 @@ describe("useComposerAutocompleteState slash commands", () => {
     ]);
   });
 
-  it("hides /apps when apps are disabled", () => {
+  it("does not filter OpenCode slash commands based on apps feature flag", () => {
     const text = "/";
     const selectionStart = text.length;
     const textareaRef = createRef<HTMLTextAreaElement>();
@@ -136,6 +136,7 @@ describe("useComposerAutocompleteState slash commands", () => {
         selectionStart,
         disabled: false,
         appsEnabled: false,
+        slashCommands,
         skills: [],
         apps: [],
         prompts: [],
@@ -147,8 +148,16 @@ describe("useComposerAutocompleteState slash commands", () => {
     );
 
     const labels = result.current.autocompleteMatches.map((item) => item.label);
-    expect(labels).not.toContain("apps");
-    expect(labels).toEqual(["compact", "fork", "mcp", "new", "resume", "review", "status"]);
+    expect(labels).toEqual([
+      "apps",
+      "compact",
+      "fork",
+      "mcp",
+      "new",
+      "resume",
+      "review",
+      "status",
+    ]);
   });
 });
 

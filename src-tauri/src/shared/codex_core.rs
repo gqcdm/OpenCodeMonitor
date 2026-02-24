@@ -805,6 +805,16 @@ pub(crate) async fn list_mcp_server_status_core(
     Ok(json!({ "result": { "data": data, "nextCursor": null } }))
 }
 
+pub(crate) async fn list_slash_commands_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let response = session.rest_get("/command").await?;
+    let data = response.as_array().cloned().unwrap_or_default();
+    Ok(json!({ "result": { "data": data } }))
+}
+
 pub(crate) async fn archive_thread_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
@@ -822,12 +832,58 @@ pub(crate) async fn compact_thread_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspace_id: String,
     thread_id: String,
+    model: Option<String>,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    // Send /compact as a message via POST /session/:id/message.
-    let path = format!("/session/{thread_id}/message");
+    let requested_model = normalize_optional_string(model);
+    let model_override = if let Some(ref model_id) = requested_model {
+        resolve_prompt_model_override(session.as_ref(), model_id)
+            .await
+            .ok_or_else(|| format!("Failed to resolve model `{model_id}` for context compaction."))?
+    } else {
+        return Err(
+            "No model selected for context compaction. Select a model (or connect a provider) and try again."
+                .to_string(),
+        );
+    };
+
+    let provider_id = model_override
+        .get("providerID")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Compaction model resolution missing providerID.".to_string())?;
+    let model_id = model_override
+        .get("modelID")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Compaction model resolution missing modelID.".to_string())?;
+
+    let path = format!("/session/{thread_id}/summarize");
+    session
+        .rest_post(
+            &path,
+            json!({
+                "providerID": provider_id,
+                "modelID": model_id,
+            }),
+        )
+        .await
+}
+
+pub(crate) async fn execute_slash_command_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+    command: String,
+    arguments: Option<String>,
+) -> Result<Value, String> {
+    let command = command.trim().trim_start_matches('/').to_string();
+    if command.is_empty() {
+        return Err("empty slash command".to_string());
+    }
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let path = format!("/session/{thread_id}/command");
     let body = json!({
-        "parts": [{ "type": "text", "text": "/compact" }]
+        "command": command,
+        "arguments": arguments.unwrap_or_default().trim().to_string()
     });
     session.rest_post(&path, body).await
 }

@@ -536,6 +536,8 @@ function MainApp() {
     startApps,
     startMcp,
     startStatus,
+    slashCommands,
+    executeSlashCommand,
     reviewPrompt,
     closeReviewPrompt,
     showPresetStep,
@@ -1191,6 +1193,8 @@ function MainApp() {
     startApps,
     startMcp,
     startStatus,
+    slashCommands,
+    executeSlashCommand,
   });
 
   const {
@@ -2089,6 +2093,7 @@ function MainApp() {
     onSelectAccessMode: handleSelectAccessMode,
     skills,
     appsEnabled: appsFeatureEnabled,
+    slashCommands,
     apps,
     prompts,
     files,
@@ -2189,6 +2194,7 @@ function MainApp() {
       onSelectInstance={handleSelectWorkspaceInstance}
       skills={skills}
       appsEnabled={appsFeatureEnabled}
+      slashCommands={slashCommands}
       apps={apps}
       prompts={prompts}
       files={files}

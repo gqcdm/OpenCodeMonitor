@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject } from "react";
 import * as Sentry from "@sentry/react";
 import type {
@@ -7,16 +7,19 @@ import type {
   RateLimitSnapshot,
   CustomPromptOption,
   DebugEntry,
+  OpenCodeSlashCommand,
   ReviewTarget,
   WorkspaceInfo,
 } from "@/types";
 import {
   compactThread as compactThreadService,
+  executeSlashCommand as executeSlashCommandService,
   sendUserMessage as sendUserMessageService,
   steerTurn as steerTurnService,
   startReview as startReviewService,
   interruptTurn as interruptTurnService,
   getAppsList as getAppsListService,
+  listSlashCommands as listSlashCommandsService,
   listMcpServerStatus as listMcpServerStatusService,
 } from "@services/tauri";
 import { expandCustomPromptText } from "@utils/customPrompts";
@@ -29,6 +32,68 @@ import {
 import { isUnsupportedTurnSteerError } from "@threads/utils/threadRpc";
 import type { ThreadAction, ThreadState } from "./useThreadsReducer";
 import { useReviewPrompt } from "./useReviewPrompt";
+
+function normalizeSlashCommandsResponse(input: unknown): OpenCodeSlashCommand[] {
+  const root = input && typeof input === "object" ? (input as Record<string, unknown>) : null;
+  const result =
+    root?.result && typeof root.result === "object"
+      ? (root.result as Record<string, unknown>)
+      : null;
+  const data = Array.isArray(result?.data)
+    ? result?.data
+    : Array.isArray(input)
+      ? input
+      : [];
+
+  const normalized: OpenCodeSlashCommand[] = [];
+  for (const entry of data) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const obj = entry as Record<string, unknown>;
+    const name = typeof obj.name === "string" ? obj.name.trim() : "";
+    if (!name) {
+      continue;
+    }
+    const description =
+      typeof obj.description === "string" && obj.description.trim().length > 0
+        ? obj.description.trim()
+        : undefined;
+    const aliases = Array.isArray(obj.aliases)
+      ? obj.aliases
+          .filter((alias): alias is string => typeof alias === "string")
+          .map((alias) => alias.trim())
+          .filter(Boolean)
+      : undefined;
+    const source =
+      typeof obj.source === "string" && obj.source.trim().length > 0
+        ? obj.source.trim()
+        : undefined;
+    normalized.push({
+      name,
+      description,
+      aliases: aliases && aliases.length > 0 ? aliases : undefined,
+      source,
+    });
+  }
+  return normalized.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function parseSlashInvocation(text: string) {
+  const trimmed = text.trim();
+  const match = /^\/([^\s]+)(?:\s+(.*))?$/s.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  const command = (match[1] ?? "").trim();
+  if (!command) {
+    return null;
+  }
+  return {
+    command,
+    argumentsText: (match[2] ?? "").trim(),
+  };
+}
 
 type SendMessageOptions = {
   skipPromptExpansion?: boolean;
@@ -113,6 +178,48 @@ export function useThreadMessaging({
   registerDetachedReviewChild,
 }: UseThreadMessagingOptions) {
   const steerSupportedByWorkspaceRef = useRef<Record<string, boolean>>({});
+  const [slashCommandsByWorkspace, setSlashCommandsByWorkspace] = useState<
+    Record<string, OpenCodeSlashCommand[]>
+  >({});
+
+  const activeWorkspaceId = activeWorkspace?.id ?? null;
+  const slashCommands = useMemo(
+    () => (activeWorkspaceId ? slashCommandsByWorkspace[activeWorkspaceId] ?? [] : []),
+    [activeWorkspaceId, slashCommandsByWorkspace],
+  );
+
+  useEffect(() => {
+    if (!activeWorkspace?.id || !activeWorkspace.connected) {
+      return;
+    }
+    let cancelled = false;
+    void listSlashCommandsService(activeWorkspace.id)
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        const normalized = normalizeSlashCommandsResponse(response);
+        setSlashCommandsByWorkspace((prev) => ({
+          ...prev,
+          [activeWorkspace.id]: normalized,
+        }));
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        onDebug?.({
+          id: `${Date.now()}-client-slash-commands-list-error`,
+          timestamp: Date.now(),
+          source: "error",
+          label: "slash_commands/list error",
+          payload: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace, onDebug]);
 
   const sendMessageToThread = useCallback(
     async (
@@ -947,7 +1054,7 @@ export function useThreadMessaging({
         return;
       }
       try {
-        await compactThreadService(activeWorkspace.id, threadId);
+        await compactThreadService(activeWorkspace.id, threadId, model ?? null);
       } catch (error) {
         pushThreadErrorMessage(
           threadId,
@@ -968,6 +1075,56 @@ export function useThreadMessaging({
     ],
   );
 
+  const executeSlashCommand = useCallback(
+    async (text: string) => {
+      if (!activeWorkspace) {
+        return;
+      }
+      const parsed = parseSlashInvocation(text);
+      if (!parsed) {
+        return;
+      }
+      const threadId = activeThreadId ?? (await ensureThreadForActiveWorkspace());
+      if (!threadId) {
+        return;
+      }
+      try {
+        const timestamp = Date.now();
+        recordThreadActivity(activeWorkspace.id, threadId, timestamp);
+        dispatch({
+          type: "setThreadTimestamp",
+          workspaceId: activeWorkspace.id,
+          threadId,
+          timestamp,
+        });
+        safeMessageActivity();
+        await executeSlashCommandService(
+          activeWorkspace.id,
+          threadId,
+          parsed.command,
+          parsed.argumentsText,
+        );
+      } catch (error) {
+        pushThreadErrorMessage(
+          threadId,
+          error instanceof Error
+            ? error.message
+            : `Failed to execute /${parsed.command}.`,
+        );
+        safeMessageActivity();
+      }
+    },
+    [
+      activeThreadId,
+      activeWorkspace,
+      dispatch,
+      ensureThreadForActiveWorkspace,
+      pushThreadErrorMessage,
+      recordThreadActivity,
+      safeMessageActivity,
+    ],
+  );
+
   return {
     interruptTurn,
     sendUserMessage,
@@ -979,6 +1136,8 @@ export function useThreadMessaging({
     startApps,
     startMcp,
     startStatus,
+    slashCommands,
+    executeSlashCommand,
     reviewPrompt,
     openReviewPrompt,
     closeReviewPrompt,

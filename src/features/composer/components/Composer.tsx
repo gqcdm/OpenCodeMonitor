@@ -14,6 +14,7 @@ import type {
   ComposerEditorSettings,
   CustomPromptOption,
   DictationTranscript,
+  OpenCodeSlashCommand,
   QueuedMessage,
   ThreadTokenUsage,
 } from "../../../types";
@@ -52,6 +53,7 @@ type ComposerProps = {
   disabled?: boolean;
   isConnected?: boolean;
   appsEnabled: boolean;
+  slashCommands?: OpenCodeSlashCommand[];
   isProcessing: boolean;
   steerEnabled: boolean;
   collaborationModes: { id: string; label: string }[];
@@ -156,6 +158,7 @@ export const Composer = memo(function Composer({
   disabled = false,
   isConnected = false,
   appsEnabled,
+  slashCommands = [],
   isProcessing,
   steerEnabled,
   collaborationModes,
@@ -283,6 +286,7 @@ export const Composer = memo(function Composer({
     selectionStart,
     disabled,
     appsEnabled,
+    slashCommands,
     skills,
     apps,
     prompts,

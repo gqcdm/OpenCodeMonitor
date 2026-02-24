@@ -13,6 +13,7 @@ import type {
   DictationSessionState,
   DictationTranscript,
   ModelOption,
+  OpenCodeSlashCommand,
   SkillOption,
   WorkspaceInfo,
 } from "../../../types";
@@ -69,6 +70,7 @@ type WorkspaceHomeProps = {
   onSelectInstance: (workspaceId: string, threadId: string) => void;
   skills: SkillOption[];
   appsEnabled: boolean;
+  slashCommands?: OpenCodeSlashCommand[];
   apps: AppOption[];
   prompts: CustomPromptOption[];
   files: string[];
@@ -128,6 +130,7 @@ export function WorkspaceHome({
   onSelectInstance,
   skills,
   appsEnabled,
+  slashCommands = [],
   apps,
   prompts,
   files,
@@ -188,6 +191,7 @@ export function WorkspaceHome({
     selectionStart,
     disabled: isSubmitting,
     appsEnabled,
+    slashCommands,
     skills,
     apps,
     prompts,

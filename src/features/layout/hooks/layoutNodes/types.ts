@@ -23,6 +23,7 @@ import type {
   LocalUsageSnapshot,
   ModelOption,
   OpenAppTarget,
+  OpenCodeSlashCommand,
   QueuedMessage,
   PullRequestReviewAction,
   PullRequestReviewIntent,
@@ -431,6 +432,7 @@ export type LayoutNodesOptions = {
   onSelectAccessMode: (mode: AccessMode) => void;
   skills: SkillOption[];
   appsEnabled: boolean;
+  slashCommands?: OpenCodeSlashCommand[];
   apps: AppOption[];
   prompts: CustomPromptOption[];
   files: string[];

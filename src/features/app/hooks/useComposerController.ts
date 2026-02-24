@@ -1,5 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
-import type { AppMention, QueuedMessage, WorkspaceInfo } from "../../../types";
+import type {
+  AppMention,
+  OpenCodeSlashCommand,
+  QueuedMessage,
+  WorkspaceInfo,
+} from "../../../types";
 import { useComposerImages } from "../../composer/hooks/useComposerImages";
 import { useQueuedSend } from "../../threads/hooks/useQueuedSend";
 
@@ -23,6 +28,8 @@ export function useComposerController({
   startApps,
   startMcp,
   startStatus,
+  slashCommands = [],
+  executeSlashCommand = async () => {},
 }: {
   activeThreadId: string | null;
   activeTurnId: string | null;
@@ -55,6 +62,8 @@ export function useComposerController({
   startApps: (text: string) => Promise<void>;
   startMcp: (text: string) => Promise<void>;
   startStatus: (text: string) => Promise<void>;
+  slashCommands?: OpenCodeSlashCommand[];
+  executeSlashCommand?: (text: string) => Promise<void>;
 }) {
   const [composerDraftsByThread, setComposerDraftsByThread] = useState<
     Record<string, string>
@@ -98,6 +107,8 @@ export function useComposerController({
     startApps,
     startMcp,
     startStatus,
+    slashCommands,
+    executeSlashCommand,
     clearActiveImages,
   });
 

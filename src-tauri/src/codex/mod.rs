@@ -174,6 +174,25 @@ pub(crate) async fn list_mcp_server_status(
 }
 
 #[tauri::command]
+pub(crate) async fn list_slash_commands(
+    workspace_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "list_slash_commands",
+            json!({ "workspaceId": workspace_id }),
+        )
+        .await;
+    }
+
+    codex_core::list_slash_commands_core(&state.sessions, workspace_id).await
+}
+
+#[tauri::command]
 pub(crate) async fn archive_thread(
     workspace_id: String,
     thread_id: String,
@@ -197,6 +216,7 @@ pub(crate) async fn archive_thread(
 pub(crate) async fn compact_thread(
     workspace_id: String,
     thread_id: String,
+    model: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Value, String> {
@@ -205,12 +225,46 @@ pub(crate) async fn compact_thread(
             &*state,
             app,
             "compact_thread",
-            json!({ "workspaceId": workspace_id, "threadId": thread_id }),
+            json!({ "workspaceId": workspace_id, "threadId": thread_id, "model": model }),
         )
         .await;
     }
 
-    codex_core::compact_thread_core(&state.sessions, workspace_id, thread_id).await
+    codex_core::compact_thread_core(&state.sessions, workspace_id, thread_id, model).await
+}
+
+#[tauri::command]
+pub(crate) async fn execute_slash_command(
+    workspace_id: String,
+    thread_id: String,
+    command: String,
+    arguments: Option<String>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "execute_slash_command",
+            json!({
+                "workspaceId": workspace_id,
+                "threadId": thread_id,
+                "command": command,
+                "arguments": arguments,
+            }),
+        )
+        .await;
+    }
+
+    codex_core::execute_slash_command_core(
+        &state.sessions,
+        workspace_id,
+        thread_id,
+        command,
+        arguments,
+    )
+    .await
 }
 
 #[tauri::command]

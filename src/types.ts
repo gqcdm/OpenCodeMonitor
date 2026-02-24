@@ -628,6 +628,13 @@ export type AppOption = {
   distributionChannel?: string | null;
 };
 
+export type OpenCodeSlashCommand = {
+  name: string;
+  description?: string;
+  aliases?: string[];
+  source?: string;
+};
+
 export type CustomPromptOption = {
   name: string;
   path: string;

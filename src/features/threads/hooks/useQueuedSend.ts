@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AppMention, QueuedMessage, WorkspaceInfo } from "@/types";
+import type {
+  AppMention,
+  OpenCodeSlashCommand,
+  QueuedMessage,
+  WorkspaceInfo,
+} from "@/types";
 
 type UseQueuedSendOptions = {
   activeThreadId: string | null;
@@ -32,6 +37,8 @@ type UseQueuedSendOptions = {
   startApps: (text: string) => Promise<void>;
   startMcp: (text: string) => Promise<void>;
   startStatus: (text: string) => Promise<void>;
+  slashCommands?: OpenCodeSlashCommand[];
+  executeSlashCommand?: (text: string) => Promise<void>;
   clearActiveImages: () => void;
 };
 
@@ -61,7 +68,11 @@ type SlashCommandKind =
   | "review"
   | "status";
 
-function parseSlashCommand(text: string, appsEnabled: boolean): SlashCommandKind | null {
+type ParsedSlashCommand =
+  | { kind: "local"; command: SlashCommandKind }
+  | { kind: "opencode"; command: string };
+
+function parseLocalSlashCommand(text: string, appsEnabled: boolean): SlashCommandKind | null {
   if (appsEnabled && /^\/apps\b/i.test(text)) {
     return "apps";
   }
@@ -89,6 +100,45 @@ function parseSlashCommand(text: string, appsEnabled: boolean): SlashCommandKind
   return null;
 }
 
+function parseOpenCodeSlashCommand(
+  text: string,
+  slashCommands: OpenCodeSlashCommand[],
+): string | null {
+  const match = /^\/([^\s]+)/.exec(text.trim());
+  const slashName = (match?.[1] ?? "").trim().toLowerCase();
+  if (!slashName) {
+    return null;
+  }
+  for (const command of slashCommands) {
+    const name = command.name.trim();
+    if (name && name.toLowerCase() === slashName) {
+      return name;
+    }
+    for (const alias of command.aliases ?? []) {
+      if (alias.trim().toLowerCase() === slashName) {
+        return name || alias.trim();
+      }
+    }
+  }
+  return null;
+}
+
+function parseSlashCommand(
+  text: string,
+  appsEnabled: boolean,
+  slashCommands: OpenCodeSlashCommand[],
+): ParsedSlashCommand | null {
+  const local = parseLocalSlashCommand(text, appsEnabled);
+  if (local) {
+    return { kind: "local", command: local };
+  }
+  const opencode = parseOpenCodeSlashCommand(text, slashCommands);
+  if (opencode) {
+    return { kind: "opencode", command: opencode };
+  }
+  return null;
+}
+
 export function useQueuedSend({
   activeThreadId,
   activeTurnId,
@@ -108,6 +158,8 @@ export function useQueuedSend({
   startApps,
   startMcp,
   startStatus,
+  slashCommands = [],
+  executeSlashCommand = async () => {},
   clearActiveImages,
 }: UseQueuedSendOptions): UseQueuedSendResult {
   const [queuedByThread, setQueuedByThread] = useState<
@@ -152,36 +204,40 @@ export function useQueuedSend({
   }, []);
 
   const runSlashCommand = useCallback(
-    async (command: SlashCommandKind, trimmed: string) => {
-      if (command === "fork") {
+    async (command: ParsedSlashCommand, trimmed: string) => {
+      if (command.kind === "opencode") {
+        await executeSlashCommand(trimmed);
+        return;
+      }
+      if (command.command === "fork") {
         await startFork(trimmed);
         return;
       }
-      if (command === "review") {
+      if (command.command === "review") {
         await startReview(trimmed);
         return;
       }
-      if (command === "resume") {
+      if (command.command === "resume") {
         await startResume(trimmed);
         return;
       }
-      if (command === "compact") {
+      if (command.command === "compact") {
         await startCompact(trimmed);
         return;
       }
-      if (command === "apps") {
+      if (command.command === "apps") {
         await startApps(trimmed);
         return;
       }
-      if (command === "mcp") {
+      if (command.command === "mcp") {
         await startMcp(trimmed);
         return;
       }
-      if (command === "status") {
+      if (command.command === "status") {
         await startStatus(trimmed);
         return;
       }
-      if (command === "new" && activeWorkspace) {
+      if (command.command === "new" && activeWorkspace) {
         const threadId = await startThreadForWorkspace(activeWorkspace.id);
         const rest = trimmed.replace(/^\/new\b/i, "").trim();
         if (threadId && rest) {
@@ -199,6 +255,7 @@ export function useQueuedSend({
       startApps,
       startMcp,
       startStatus,
+      executeSlashCommand,
       startThreadForWorkspace,
     ],
   );
@@ -210,7 +267,7 @@ export function useQueuedSend({
       appMentions: AppMention[] = [],
     ) => {
       const trimmed = text.trim();
-      const command = parseSlashCommand(trimmed, appsEnabled);
+      const command = parseSlashCommand(trimmed, appsEnabled, slashCommands);
       const nextImages = command ? [] : images;
       const nextMentions = command ? [] : appMentions;
       if (!trimmed && nextImages.length === 0) {
@@ -249,6 +306,7 @@ export function useQueuedSend({
     [
       activeThreadId,
       appsEnabled,
+      slashCommands,
       activeWorkspace,
       clearActiveImages,
       connectWorkspace,
@@ -269,7 +327,7 @@ export function useQueuedSend({
       appMentions: AppMention[] = [],
     ) => {
       const trimmed = text.trim();
-      const command = parseSlashCommand(trimmed, appsEnabled);
+      const command = parseSlashCommand(trimmed, appsEnabled, slashCommands);
       const nextImages = command ? [] : images;
       const nextMentions = command ? [] : appMentions;
       if (!trimmed && nextImages.length === 0) {
@@ -291,7 +349,14 @@ export function useQueuedSend({
       enqueueMessage(activeThreadId, item);
       clearActiveImages();
     },
-    [activeThreadId, appsEnabled, clearActiveImages, enqueueMessage, isReviewing],
+    [
+      activeThreadId,
+      appsEnabled,
+      slashCommands,
+      clearActiveImages,
+      enqueueMessage,
+      isReviewing,
+    ],
   );
 
   useEffect(() => {
@@ -345,7 +410,7 @@ export function useQueuedSend({
     (async () => {
       try {
         const trimmed = nextItem.text.trim();
-        const command = parseSlashCommand(trimmed, appsEnabled);
+        const command = parseSlashCommand(trimmed, appsEnabled, slashCommands);
         if (command) {
           await runSlashCommand(command, trimmed);
         } else {
@@ -365,6 +430,7 @@ export function useQueuedSend({
   }, [
     activeThreadId,
     appsEnabled,
+    slashCommands,
     inFlightByThread,
     isProcessing,
     isReviewing,

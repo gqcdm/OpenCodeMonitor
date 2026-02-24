@@ -677,6 +677,10 @@ impl DaemonState {
         codex_core::list_mcp_server_status_core(&self.sessions, workspace_id, cursor, limit).await
     }
 
+    async fn list_slash_commands(&self, workspace_id: String) -> Result<Value, String> {
+        codex_core::list_slash_commands_core(&self.sessions, workspace_id).await
+    }
+
     async fn archive_thread(
         &self,
         workspace_id: String,
@@ -689,8 +693,26 @@ impl DaemonState {
         &self,
         workspace_id: String,
         thread_id: String,
+        model: Option<String>,
     ) -> Result<Value, String> {
-        codex_core::compact_thread_core(&self.sessions, workspace_id, thread_id).await
+        codex_core::compact_thread_core(&self.sessions, workspace_id, thread_id, model).await
+    }
+
+    async fn execute_slash_command(
+        &self,
+        workspace_id: String,
+        thread_id: String,
+        command: String,
+        arguments: Option<String>,
+    ) -> Result<Value, String> {
+        codex_core::execute_slash_command_core(
+            &self.sessions,
+            workspace_id,
+            thread_id,
+            command,
+            arguments,
+        )
+        .await
     }
 
     async fn set_thread_name(

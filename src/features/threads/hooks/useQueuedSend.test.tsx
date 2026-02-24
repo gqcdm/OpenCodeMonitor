@@ -410,6 +410,25 @@ describe("useQueuedSend", () => {
     expect(options.startReview).not.toHaveBeenCalled();
   });
 
+  it("routes OpenCode slash commands to the generic slash executor", async () => {
+    const executeSlashCommand = vi.fn().mockResolvedValue(undefined);
+    const options = makeOptions({
+      slashCommands: [{ name: "explain", description: "Explain code" }],
+      executeSlashCommand,
+    });
+    const { result } = renderHook((props) => useQueuedSend(props), {
+      initialProps: options,
+    });
+
+    await act(async () => {
+      await result.current.handleSend("/explain src/App.tsx", ["img-1"]);
+    });
+
+    expect(executeSlashCommand).toHaveBeenCalledWith("/explain src/App.tsx");
+    expect(options.sendUserMessage).not.toHaveBeenCalled();
+    expect(options.startReview).not.toHaveBeenCalled();
+  });
+
   it("does not send when reviewing even if steer is enabled", async () => {
     const options = makeOptions({ isReviewing: true, steerEnabled: true });
     const { result } = renderHook((props) => useQueuedSend(props), {

@@ -1,7 +1,11 @@
 import { useCallback, useMemo } from "react";
 import type { AutocompleteItem } from "./useComposerAutocomplete";
 import { useComposerAutocomplete } from "./useComposerAutocomplete";
-import type { AppOption, CustomPromptOption } from "../../../types";
+import type {
+  AppOption,
+  CustomPromptOption,
+  OpenCodeSlashCommand,
+} from "../../../types";
 import { connectorMentionSlug } from "../../apps/utils/appMentions";
 import {
   buildPromptInsertText,
@@ -17,6 +21,7 @@ type UseComposerAutocompleteStateArgs = {
   selectionStart: number | null;
   disabled: boolean;
   appsEnabled: boolean;
+  slashCommands?: OpenCodeSlashCommand[];
   skills: Skill[];
   apps: AppOption[];
   prompts: CustomPromptOption[];
@@ -32,6 +37,70 @@ type UseComposerAutocompleteStateArgs = {
 
 const MAX_FILE_SUGGESTIONS = 500;
 const FILE_TRIGGER_PREFIX = new RegExp("^(?:\\s|[\"'`]|\\(|\\[|\\{)$");
+
+function getLocalSlashCommandItems(appsEnabled: boolean): AutocompleteItem[] {
+  const commands: AutocompleteItem[] = [
+    {
+      id: "local:compact",
+      label: "compact",
+      description: "compact the active thread context",
+      insertText: "compact",
+      group: "Slash",
+    },
+    {
+      id: "local:fork",
+      label: "fork",
+      description: "branch into a new thread",
+      insertText: "fork",
+      group: "Slash",
+    },
+    {
+      id: "local:mcp",
+      label: "mcp",
+      description: "list configured MCP tools",
+      insertText: "mcp",
+      group: "Slash",
+    },
+    {
+      id: "local:new",
+      label: "new",
+      description: "start a new chat",
+      insertText: "new",
+      group: "Slash",
+    },
+    {
+      id: "local:review",
+      label: "review",
+      description: "start a code review",
+      insertText: "review",
+      group: "Slash",
+    },
+    {
+      id: "local:resume",
+      label: "resume",
+      description: "refresh the active thread",
+      insertText: "resume",
+      group: "Slash",
+    },
+    {
+      id: "local:status",
+      label: "status",
+      description: "show session status",
+      insertText: "status",
+      group: "Slash",
+    },
+  ];
+  if (appsEnabled) {
+    commands.push({
+      id: "local:apps",
+      label: "apps",
+      description: "list available apps",
+      insertText: "apps",
+      group: "Slash",
+    });
+  }
+  return commands;
+}
 
 function isFileTriggerActive(text: string, cursor: number | null) {
   if (!text || cursor === null) {
@@ -75,6 +144,7 @@ export function useComposerAutocompleteState({
   selectionStart,
   disabled,
   appsEnabled,
+  slashCommands = [],
   skills,
   apps,
   prompts,
@@ -148,68 +218,39 @@ export function useComposerAutocompleteState({
   );
 
   const slashCommandItems = useMemo<AutocompleteItem[]>(() => {
-    const commands: AutocompleteItem[] = [
-      {
-        id: "compact",
-        label: "compact",
-        description: "compact the active thread context",
-        insertText: "compact",
-        group: "Slash",
-      },
-      {
-        id: "fork",
-        label: "fork",
-        description: "branch into a new thread",
-        insertText: "fork",
-        group: "Slash",
-      },
-      {
-        id: "mcp",
-        label: "mcp",
-        description: "list configured MCP tools",
-        insertText: "mcp",
-        group: "Slash",
-      },
-      {
-        id: "new",
-        label: "new",
-        description: "start a new chat",
-        insertText: "new",
-        group: "Slash",
-      },
-      {
-        id: "review",
-        label: "review",
-        description: "start a code review",
-        insertText: "review",
-        group: "Slash",
-      },
-      {
-        id: "resume",
-        label: "resume",
-        description: "refresh the active thread",
-        insertText: "resume",
-        group: "Slash",
-      },
-      {
-        id: "status",
-        label: "status",
-        description: "show session status",
-        insertText: "status",
-        group: "Slash",
-      },
-    ];
-    if (appsEnabled) {
-      commands.push({
-        id: "apps",
-        label: "apps",
-        description: "list available apps",
-        insertText: "apps",
+    const seen = new Set<string>();
+    const items: AutocompleteItem[] = [];
+
+    for (const localItem of getLocalSlashCommandItems(appsEnabled)) {
+      const key = localItem.label.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      items.push(localItem);
+    }
+
+    for (const command of slashCommands) {
+      const label = command.name.trim();
+      if (!label) {
+        continue;
+      }
+      const dedupeKey = label.toLowerCase();
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      items.push({
+        id: command.source ? `${command.source}:${label}` : label,
+        label,
+        description: command.description,
+        insertText: label,
         group: "Slash",
       });
     }
-    return commands.sort((a, b) => a.label.localeCompare(b.label));
-  }, [appsEnabled]);
+
+    return items.sort((a, b) => a.label.localeCompare(b.label));
+  }, [appsEnabled, slashCommands]);
 
   const slashItems = useMemo<AutocompleteItem[]>(
     () => [...slashCommandItems, ...promptItems],

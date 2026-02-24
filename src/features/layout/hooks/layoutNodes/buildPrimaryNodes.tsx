@@ -167,6 +167,7 @@ export function buildPrimaryNodes(options: LayoutNodesOptions): PrimaryLayoutNod
       onSelectAccessMode={options.onSelectAccessMode}
       skills={options.skills}
       appsEnabled={options.appsEnabled}
+      slashCommands={options.slashCommands ?? []}
       apps={options.apps}
       prompts={options.prompts}
       files={options.files}

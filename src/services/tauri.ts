@@ -13,6 +13,7 @@ import type {
   OrbitRunnerStatus,
   OrbitSignInPollResult,
   OrbitSignOutResult,
+  OpenCodeSlashCommand,
   TcpDaemonStatus,
   TailscaleDaemonCommandPreview,
   TailscaleStatus,
@@ -274,8 +275,12 @@ export async function forkThread(workspaceId: string, threadId: string) {
   return invoke<any>("fork_thread", { workspaceId, threadId });
 }
 
-export async function compactThread(workspaceId: string, threadId: string) {
-  return invoke<any>("compact_thread", { workspaceId, threadId });
+export async function compactThread(
+  workspaceId: string,
+  threadId: string,
+  model?: string | null,
+) {
+  return invoke<any>("compact_thread", { workspaceId, threadId, model: model ?? null });
 }
 
 export async function sendUserMessage(
@@ -874,6 +879,12 @@ export async function listMcpServerStatus(
   return invoke<any>("list_mcp_server_status", { workspaceId, cursor, limit });
 }
 
+export async function listSlashCommands(
+  workspaceId: string,
+): Promise<{ result?: { data?: OpenCodeSlashCommand[] } } | OpenCodeSlashCommand[]> {
+  return invoke("list_slash_commands", { workspaceId });
+}
+
 export async function resumeThread(workspaceId: string, threadId: string) {
   return invoke<any>("resume_thread", { workspaceId, threadId });
 }
@@ -888,6 +899,20 @@ export async function setThreadName(
   name: string,
 ) {
   return invoke<any>("set_thread_name", { workspaceId, threadId, name });
+}
+
+export async function executeSlashCommand(
+  workspaceId: string,
+  threadId: string,
+  command: string,
+  argumentsText?: string | null,
+) {
+  return invoke<any>("execute_slash_command", {
+    workspaceId,
+    threadId,
+    command,
+    arguments: argumentsText ?? null,
+  });
 }
 
 export async function generateCommitMessage(

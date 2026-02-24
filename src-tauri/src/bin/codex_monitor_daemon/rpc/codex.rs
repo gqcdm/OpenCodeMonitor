@@ -76,6 +76,13 @@ pub(super) async fn try_handle(
                     .await,
             )
         }
+        "list_slash_commands" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            Some(state.list_slash_commands(workspace_id).await)
+        }
         "archive_thread" => {
             let workspace_id = match parse_string(params, "workspaceId") {
                 Ok(value) => value,
@@ -96,7 +103,28 @@ pub(super) async fn try_handle(
                 Ok(value) => value,
                 Err(err) => return Some(Err(err)),
             };
-            Some(state.compact_thread(workspace_id, thread_id).await)
+            let model = parse_optional_string(params, "model");
+            Some(state.compact_thread(workspace_id, thread_id, model).await)
+        }
+        "execute_slash_command" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let thread_id = match parse_string(params, "threadId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let command = match parse_string(params, "command") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let arguments = parse_optional_string(params, "arguments");
+            Some(
+                state
+                    .execute_slash_command(workspace_id, thread_id, command, arguments)
+                    .await,
+            )
         }
         "set_thread_name" => {
             let workspace_id = match parse_string(params, "workspaceId") {
