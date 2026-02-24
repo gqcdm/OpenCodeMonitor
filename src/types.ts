@@ -98,6 +98,12 @@ export type ConversationItem =
       output?: string;
       durationMs?: number | null;
       changes?: { path: string; kind?: string; diff?: string }[];
+    }
+  | {
+      id: string;
+      kind: "todo";
+      status: "pending" | "completed";
+      todos: { content: string; status: string; priority: string }[];
     };
 
 export type ThreadSummary = {

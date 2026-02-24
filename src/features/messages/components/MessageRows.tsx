@@ -13,6 +13,7 @@ import Terminal from "lucide-react/dist/esm/icons/terminal";
 import Users from "lucide-react/dist/esm/icons/users";
 import Wrench from "lucide-react/dist/esm/icons/wrench";
 import X from "lucide-react/dist/esm/icons/x";
+import ListChecks from "lucide-react/dist/esm/icons/list-checks";
 import type { ConversationItem } from "../../../types";
 import { languageFromPath } from "../../../utils/syntax";
 import { DiffBlock } from "../../git/components/DiffBlock";
@@ -698,6 +699,65 @@ export const ExploreRow = memo(function ExploreRow({ item }: ExploreRowProps) {
               )}
             </div>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+type TodoRowProps = {
+  item: Extract<ConversationItem, { kind: "todo" }>;
+};
+
+function todoStatusClass(status: string) {
+  if (status === "completed") return "completed";
+  if (status === "in_progress") return "processing";
+  if (status === "cancelled") return "failed";
+  return "";
+}
+
+function todoPriorityLabel(priority: string) {
+  if (priority === "high") return "high";
+  if (priority === "low") return "low";
+  return null;
+}
+
+export const TodoRow = memo(function TodoRow({ item }: TodoRowProps) {
+  const tone = item.status === "completed" ? "completed" : "processing";
+  return (
+    <div className="tool-inline todo-inline">
+      <div className="tool-inline-bar-toggle" aria-hidden />
+      <div className="tool-inline-content">
+        <div className="todo-inline-header">
+          <ListChecks
+            className={`tool-inline-icon ${tone}`}
+            size={14}
+            aria-hidden
+          />
+          <span className="todo-inline-title">Tasks</span>
+        </div>
+        <div className="todo-inline-list">
+          {item.todos.map((todo, index) => {
+            const statusClass = todoStatusClass(todo.status);
+            const priorityLabel = todoPriorityLabel(todo.priority);
+            return (
+              <div
+                key={`${todo.content}-${index}`}
+                className={`todo-inline-item ${statusClass ? `todo-inline-item--${statusClass}` : ""}`}
+              >
+                <span
+                  className={`todo-inline-dot ${statusClass}`}
+                  aria-hidden
+                />
+                <span className="todo-inline-content">{todo.content}</span>
+                {priorityLabel && (
+                  <span className={`todo-inline-priority todo-inline-priority--${todo.priority}`}>
+                    {priorityLabel}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

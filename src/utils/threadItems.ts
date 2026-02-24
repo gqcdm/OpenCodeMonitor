@@ -119,6 +119,9 @@ export function normalizeItem(item: ConversationItem): ConversationItem {
         : item.changes,
     };
   }
+  if (item.kind === "todo") {
+    return item;
+  }
   return item;
 }
 
@@ -549,6 +552,15 @@ export function upsertItem(list: ConversationItem[], item: ConversationItem) {
     return next;
   }
 
+  if (existing.kind === "todo" && item.kind === "todo") {
+    next[index] = {
+      ...existing,
+      ...item,
+      todos: item.todos.length > 0 ? item.todos : existing.todos,
+    };
+    return next;
+  }
+
   next[index] = { ...existing, ...item };
   return next;
 }
@@ -798,6 +810,22 @@ export function buildConversationItem(
       state: type === "enteredReviewMode" ? "started" : "completed",
       text: asString(item.review ?? ""),
     };
+  }
+  if (type === "todowrite") {
+    const rawTodos = Array.isArray(item.todos) ? item.todos : [];
+    const todos = rawTodos
+      .map((todo) => {
+        const content = asString(todo?.content ?? "");
+        const status = asString(todo?.status ?? "pending");
+        const priority = asString(todo?.priority ?? "medium");
+        if (!content) return null;
+        return { content, status, priority };
+      })
+      .filter((t): t is NonNullable<typeof t> => t !== null);
+    const rawStatus = asString(item.status ?? "");
+    const status: "pending" | "completed" =
+      rawStatus === "completed" ? "completed" : "pending";
+    return { id, kind: "todo", status, todos };
   }
   return null;
 }

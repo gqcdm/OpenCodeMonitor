@@ -1174,3 +1174,106 @@
   color: var(--message-link-color);
   font-size: 0.97em;
 }
+
+/* ----- Todo inline ----- */
+
+.todo-inline .tool-inline-bar-toggle {
+  cursor: default;
+  pointer-events: none;
+}
+
+.todo-inline-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-stronger);
+}
+
+.todo-inline-title {
+  font-weight: 600;
+}
+
+.todo-inline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.todo-inline-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-stronger);
+}
+
+.todo-inline-item--completed {
+  color: var(--text-faint);
+}
+
+.todo-inline-item--failed {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.todo-inline-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-subtle);
+  flex: 0 0 auto;
+  background: transparent;
+  margin-top: 1px;
+}
+
+.todo-inline-dot.completed {
+  background: var(--status-success);
+  border-color: var(--status-success);
+}
+
+.todo-inline-dot.processing {
+  background: var(--status-warning);
+  border-color: var(--status-warning);
+}
+
+.todo-inline-dot.failed {
+  background: var(--text-faint);
+  border-color: var(--text-faint);
+}
+
+.todo-inline-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.todo-inline-item--completed .todo-inline-content {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-faint);
+}
+
+.todo-inline-priority {
+  flex: 0 0 auto;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--text-faint);
+  background: var(--surface-card-strong);
+  border: 1px solid var(--border-subtle);
+}
+
+.todo-inline-priority--high {
+  color: var(--status-error);
+  border-color: color-mix(in srgb, var(--status-error) 28%, transparent);
+  background: color-mix(in srgb, var(--status-error) 10%, transparent);
+}
+
+.todo-inline-priority--low {
+  color: var(--text-fainter);
+}

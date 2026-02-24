@@ -350,6 +350,7 @@ pub(crate) fn translate_sse_event(
         "question.asked" => translate_question_asked(properties, state),
         "question.replied" => translate_question_completed(properties),
         "question.rejected" => translate_question_completed(properties),
+        "todo.updated" => translate_todo_updated(properties, state),
         "server.heartbeat"
         | "file.watcher.updated"
         | "session.deleted"
@@ -846,6 +847,42 @@ fn translate_tool_part(
                 "item": item
             }
         }));
+        if status == "completed" || status == "error" {
+            state.reset_agent_message_item(thread_id);
+        }
+        return events;
+    }
+
+    // Handle todowrite tool specially — emit a todo item
+    if tool_name == "todowrite" {
+        let todo_status = match status {
+            "pending" | "running" => "pending",
+            _ => "completed",
+        };
+        let todos = build_todo_list(raw_input.as_ref(), tool_state);
+        let item = json!({
+            "id": item_id,
+            "type": "todowrite",
+            "status": todo_status,
+            "todos": todos
+        });
+        let method = match status {
+            "pending" | "running" => "item/started",
+            _ => "item/completed",
+        };
+        events.push(json!({
+            "method": method,
+            "params": {
+                "threadId": thread_id,
+                "item": item
+            }
+        }));
+        // Also emit a plan update so the PlanPanel sidebar shows the todo list
+        let turn_id = state
+            .get_turn_state(thread_id)
+            .map(|ts| ts.turn_id.clone())
+            .unwrap_or_default();
+        events.push(build_plan_from_todos(thread_id, &turn_id, &todos));
         if status == "completed" || status == "error" {
             state.reset_agent_message_item(thread_id);
         }
@@ -1494,6 +1531,34 @@ fn translate_question_completed(properties: &Value) -> Vec<Value> {
     })]
 }
 
+/// Translate an OpenCode `todo.updated` SSE event into a `turn/plan/updated`
+/// event so the PlanPanel sidebar reflects the current session todo list.
+fn translate_todo_updated(
+    properties: &Value,
+    state: &mut SessionTranslationState,
+) -> Vec<Value> {
+    let session_id = properties
+        .get("sessionID")
+        .or_else(|| properties.get("sessionId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(&state.session_id)
+        .to_string();
+    let thread_id = if session_id.is_empty() {
+        state.session_id.clone()
+    } else {
+        session_id
+    };
+    let turn_id = state
+        .get_turn_state(&thread_id)
+        .map(|ts| ts.turn_id.clone())
+        .unwrap_or_default();
+    let todos = properties
+        .get("todos")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    vec![build_plan_from_todos(&thread_id, &turn_id, &todos)]
+}
+
 // ---------------------------------------------------------------------------
 // Synthetic turn events
 // ---------------------------------------------------------------------------
@@ -1552,8 +1617,100 @@ fn tool_kind_to_item_type(kind: &str) -> &str {
         "edit" | "write" | "create" => "fileChange",
         "bash" | "command" | "terminal" => "commandExecution",
         "read" | "grep" | "glob" | "list" | "ls" => "explore",
+        "todowrite" => "todowrite",
         _ => "commandExecution",
     }
+}
+
+/// Build a JSON array of todo items from the todowrite tool's input or metadata.
+/// Falls back to extracting todos from the input field if metadata is not present.
+fn build_todo_list(raw_input: Option<&Value>, tool_state: &Value) -> Value {
+    // Prefer metadata.todos (populated on completion) over input.todos (the request payload)
+    if let Some(todos) = tool_state
+        .get("metadata")
+        .and_then(|m| m.get("todos"))
+        .and_then(|t| t.as_array())
+    {
+        let items: Vec<Value> = todos
+            .iter()
+            .filter_map(|todo| {
+                let content = todo.get("content").and_then(|v| v.as_str())?;
+                let status = todo
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("pending");
+                let priority = todo
+                    .get("priority")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("medium");
+                Some(json!({ "content": content, "status": status, "priority": priority }))
+            })
+            .collect();
+        return json!(items);
+    }
+    // Fall back to input.todos
+    if let Some(input) = raw_input {
+        if let Some(todos) = input.get("todos").and_then(|t| t.as_array()) {
+            let items: Vec<Value> = todos
+                .iter()
+                .filter_map(|todo| {
+                    let content = todo.get("content").and_then(|v| v.as_str())?;
+                    let status = todo
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("pending");
+                    let priority = todo
+                        .get("priority")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("medium");
+                    Some(json!({ "content": content, "status": status, "priority": priority }))
+                })
+                .collect();
+            return json!(items);
+        }
+    }
+    json!([])
+}
+
+/// Map an OpenCode todo status string to a CodexMonitor plan step status.
+fn todo_status_to_plan_status(status: &str) -> &'static str {
+    match status {
+        "completed" => "completed",
+        "in_progress" => "inProgress",
+        "cancelled" => "completed",
+        _ => "pending",
+    }
+}
+
+/// Build a `turn/plan/updated` event from a list of todo JSON values.
+/// Returns `None` when the todo list is empty (the caller should decide
+/// whether to emit a clear event in that case).
+fn build_plan_from_todos(thread_id: &str, turn_id: &str, todos: &Value) -> Value {
+    let steps: Vec<Value> = todos
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|todo| {
+            let content = todo.get("content").and_then(|v| v.as_str())?;
+            let status = todo
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("pending");
+            Some(json!({
+                "step": content,
+                "status": todo_status_to_plan_status(status)
+            }))
+        })
+        .collect();
+    json!({
+        "method": "turn/plan/updated",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "explanation": null,
+            "plan": steps
+        }
+    })
 }
 
 /// Map OpenCode tool names to explore entry kinds.

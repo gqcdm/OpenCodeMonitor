@@ -33,6 +33,7 @@ import {
   MessageRow,
   ReasoningRow,
   ReviewRow,
+  TodoRow,
   ToolRow,
   WorkingIndicator,
 } from "./MessageRows";
@@ -476,6 +477,9 @@ export const Messages = memo(function Messages({
     }
     if (item.kind === "explore") {
       return <ExploreRow key={item.id} item={item} />;
+    }
+    if (item.kind === "todo") {
+      return <TodoRow key={item.id} item={item} />;
     }
     return null;
   };

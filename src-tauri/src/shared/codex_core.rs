@@ -577,6 +577,7 @@ fn replay_tool_kind_to_item_type(tool_name: &str) -> &str {
         "edit" | "write" | "create" => "fileChange",
         "bash" | "command" | "terminal" => "commandExecution",
         "task" => "collabToolCall",
+        "todowrite" => "todowrite",
         _ => "commandExecution",
     }
 }
@@ -654,6 +655,27 @@ fn replay_build_tool_item(
         }
         if !output.trim().is_empty() {
             item["output"] = json!(output);
+        }
+    } else if item_type == "todowrite" {
+        if let Some(inp) = raw_input {
+            if let Some(todos) = inp.get("todos").and_then(|t| t.as_array()) {
+                let todo_items: Vec<Value> = todos
+                    .iter()
+                    .filter_map(|todo| {
+                        let content = todo.get("content").and_then(|v| v.as_str())?;
+                        let todo_status = todo
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("pending");
+                        let priority = todo
+                            .get("priority")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("medium");
+                        Some(json!({ "content": content, "status": todo_status, "priority": priority }))
+                    })
+                    .collect();
+                item["todos"] = json!(todo_items);
+            }
         }
     }
 
