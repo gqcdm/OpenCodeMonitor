@@ -133,6 +133,41 @@ describe("threadReducer", () => {
     ]);
   });
 
+  it("does not reorder threads on non-replay user upsert without timestamp update", () => {
+    const next = threadReducer(
+      {
+        ...initialState,
+        threadsByWorkspace: {
+          "ws-1": [
+            { id: "thread-1", name: "Agent 1", updatedAt: 2000 },
+            { id: "thread-2", name: "Agent 2", updatedAt: 1000 },
+          ],
+        },
+        threadSortKeyByWorkspace: { "ws-1": "updated_at" },
+        itemsByThread: {
+          "thread-2": [],
+        },
+      },
+      {
+        type: "upsertItem",
+        workspaceId: "ws-1",
+        threadId: "thread-2",
+        item: {
+          id: "user-2",
+          kind: "message",
+          role: "user",
+          text: "New message",
+        },
+        hasCustomName: true,
+      },
+    );
+
+    expect(next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+  });
+
   it("renames auto-generated thread from assistant output when no user message", () => {
     const threads: ThreadSummary[] = [
       { id: "thread-1", name: "New Agent", updatedAt: 1 },
@@ -221,6 +256,30 @@ describe("threadReducer", () => {
       "thread-1",
       "thread-3",
       "thread-2",
+    ]);
+  });
+
+  it("preserves existing order when a timestamp update creates an updated_at tie", () => {
+    const threads: ThreadSummary[] = [
+      { id: "thread-2", name: "Agent 2", updatedAt: 1000 },
+      { id: "thread-1", name: "Agent 1", updatedAt: 900 },
+    ];
+    const next = threadReducer(
+      {
+        ...initialState,
+        threadsByWorkspace: { "ws-1": threads },
+        threadSortKeyByWorkspace: { "ws-1": "updated_at" },
+      },
+      {
+        type: "setThreadTimestamp",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        timestamp: 1000,
+      },
+    );
+    expect(next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id)).toEqual([
+      "thread-2",
+      "thread-1",
     ]);
   });
 
@@ -681,5 +740,36 @@ describe("threadReducer", () => {
     const ids = synced.threadsByWorkspace["ws-1"]?.map((t) => t.id) ?? [];
     expect(ids).toContain("thread-visible");
     expect(ids).not.toContain("thread-bg");
+  });
+
+  it("preserves existing equal-timestamp order across setThreads syncs", () => {
+    const base: ThreadState = {
+      ...initialState,
+      threadsByWorkspace: {
+        "ws-1": [
+          { id: "thread-a", name: "Agent A", updatedAt: 1000 },
+          { id: "thread-b", name: "Agent B", updatedAt: 1000 },
+          { id: "thread-c", name: "Agent C", updatedAt: 1000 },
+        ],
+      },
+      threadSortKeyByWorkspace: { "ws-1": "updated_at" },
+    };
+
+    const next = threadReducer(base, {
+      type: "setThreads",
+      workspaceId: "ws-1",
+      sortKey: "updated_at",
+      threads: [
+        { id: "thread-c", name: "Agent C", updatedAt: 1000 },
+        { id: "thread-a", name: "Agent A", updatedAt: 1000 },
+        { id: "thread-b", name: "Agent B", updatedAt: 1000 },
+      ],
+    });
+
+    expect(next.threadsByWorkspace["ws-1"]?.map((thread) => thread.id)).toEqual([
+      "thread-a",
+      "thread-b",
+      "thread-c",
+    ]);
   });
 });

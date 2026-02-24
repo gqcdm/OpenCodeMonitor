@@ -4,8 +4,11 @@ import { prefersUpdatedSort } from "./common";
 
 type ThreadStatus = ThreadState["threadStatusById"][string];
 
-function sortThreadsByUpdatedAtDesc(threads: ThreadSummary[]): ThreadSummary[] {
-  const originalIndexById = new Map(
+function sortThreadsByUpdatedAtDesc(
+  threads: ThreadSummary[],
+  previousOrderIndex?: ReadonlyMap<string, number>,
+): ThreadSummary[] {
+  const inputIndexById = new Map(
     threads.map((thread, index) => [thread.id, index] as const),
   );
   return [...threads].sort((a, b) => {
@@ -14,10 +17,19 @@ function sortThreadsByUpdatedAtDesc(threads: ThreadSummary[]): ThreadSummary[] {
     if (bUpdated !== aUpdated) {
       return bUpdated - aUpdated;
     }
-    const aIndex = originalIndexById.get(a.id) ?? Number.MAX_SAFE_INTEGER;
-    const bIndex = originalIndexById.get(b.id) ?? Number.MAX_SAFE_INTEGER;
-    if (aIndex !== bIndex) {
-      return aIndex - bIndex;
+    const aPreviousIndex = previousOrderIndex?.get(a.id);
+    const bPreviousIndex = previousOrderIndex?.get(b.id);
+    if (
+      aPreviousIndex !== undefined &&
+      bPreviousIndex !== undefined &&
+      aPreviousIndex !== bPreviousIndex
+    ) {
+      return aPreviousIndex - bPreviousIndex;
+    }
+    const aInputIndex = inputIndexById.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+    const bInputIndex = inputIndexById.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+    if (aInputIndex !== bInputIndex) {
+      return aInputIndex - bInputIndex;
     }
     return a.id.localeCompare(b.id);
   });
@@ -314,8 +326,11 @@ export function reduceThreadLifecycle(
       if (!didChange) {
         return state;
       }
+      const previousOrderIndex = new Map(
+        list.map((thread, index) => [thread.id, index] as const),
+      );
       const sorted = prefersUpdatedSort(state, action.workspaceId)
-        ? sortThreadsByUpdatedAtDesc(next)
+        ? sortThreadsByUpdatedAtDesc(next, previousOrderIndex)
         : next;
       return {
         ...state,
@@ -330,6 +345,9 @@ export function reduceThreadLifecycle(
       const visibleThreads = action.threads.filter((thread) => !hidden[thread.id]);
       const incomingIds = new Set(visibleThreads.map((thread) => thread.id));
       const existingList = state.threadsByWorkspace[action.workspaceId] ?? [];
+      const previousOrderIndex = new Map(
+        existingList.map((thread, index) => [thread.id, index] as const),
+      );
       const existingById = new Map(existingList.map((thread) => [thread.id, thread]));
 
       const activeThreadId =
@@ -396,7 +414,7 @@ export function reduceThreadLifecycle(
 
       const merged = [...freshenedThreads, ...preservedThreads];
       const sorted = prefersUpdatedSort(state, action.workspaceId)
-        ? sortThreadsByUpdatedAtDesc(merged)
+        ? sortThreadsByUpdatedAtDesc(merged, previousOrderIndex)
         : merged;
 
       return {
