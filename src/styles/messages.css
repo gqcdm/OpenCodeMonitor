@@ -160,25 +160,38 @@
   position: relative;
 }
 
-.message-copy-button {
-  display: inline-flex;
+.message-actions {
+  display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 4px;
   position: absolute;
   right: 6px;
   bottom: -12px;
-  padding: 4px;
-  border-radius: 999px;
-  background: var(--surface-card-strong);
-  border: 1px solid var(--border-strong);
   opacity: 0;
   transform: translateY(4px);
   transition: opacity 160ms ease, transform 160ms ease;
 }
 
-.message:hover .message-copy-button {
+.message:hover .message-actions {
   opacity: 1;
   transform: translateY(0);
+}
+
+.message-copy-button,
+.message-quote-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--surface-card-strong);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.message-quote-button:hover {
+  color: var(--text-stronger);
+  border-color: var(--border-accent);
 }
 
 .message-copy-icon {

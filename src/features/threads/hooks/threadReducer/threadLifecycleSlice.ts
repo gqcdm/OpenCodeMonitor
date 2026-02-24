@@ -328,11 +328,82 @@ export function reduceThreadLifecycle(
     case "setThreads": {
       const hidden = state.hiddenThreadIdsByWorkspace[action.workspaceId] ?? {};
       const visibleThreads = action.threads.filter((thread) => !hidden[thread.id]);
+      const incomingIds = new Set(visibleThreads.map((thread) => thread.id));
+      const existingList = state.threadsByWorkspace[action.workspaceId] ?? [];
+      const existingById = new Map(existingList.map((thread) => [thread.id, thread]));
+
+      const activeThreadId =
+        state.activeThreadIdByWorkspace[action.workspaceId] ?? null;
+      const threadsToPreserve = new Set<string>();
+
+      if (activeThreadId && !incomingIds.has(activeThreadId)) {
+        threadsToPreserve.add(activeThreadId);
+      }
+
+      for (const [threadId, status] of Object.entries(state.threadStatusById)) {
+        if (status.isProcessing && !incomingIds.has(threadId)) {
+          threadsToPreserve.add(threadId);
+        }
+      }
+
+      for (const threadId of threadsToPreserve) {
+        let parentId = state.threadParentById[threadId];
+        while (parentId && !incomingIds.has(parentId)) {
+          threadsToPreserve.add(parentId);
+          parentId = state.threadParentById[parentId];
+        }
+      }
+
+      const freshenedThreads = visibleThreads.map((thread) => {
+        const lastMsg = state.lastAgentMessageByThread[thread.id];
+        const status = state.threadStatusById[thread.id];
+        let freshUpdatedAt = thread.updatedAt ?? 0;
+
+        if (lastMsg && lastMsg.timestamp > freshUpdatedAt) {
+          freshUpdatedAt = lastMsg.timestamp;
+        }
+        if (status?.processingStartedAt && status.processingStartedAt > freshUpdatedAt) {
+          freshUpdatedAt = status.processingStartedAt;
+        }
+
+        return freshUpdatedAt !== (thread.updatedAt ?? 0)
+          ? { ...thread, updatedAt: freshUpdatedAt }
+          : thread;
+      });
+
+      const preservedThreads: ThreadSummary[] = [];
+      for (const threadId of threadsToPreserve) {
+        const existing = existingById.get(threadId);
+        if (existing) {
+          let freshUpdatedAt = existing.updatedAt ?? 0;
+          const lastMsg = state.lastAgentMessageByThread[threadId];
+          const status = state.threadStatusById[threadId];
+
+          if (lastMsg && lastMsg.timestamp > freshUpdatedAt) {
+            freshUpdatedAt = lastMsg.timestamp;
+          }
+          if (status?.processingStartedAt && status.processingStartedAt > freshUpdatedAt) {
+            freshUpdatedAt = status.processingStartedAt;
+          }
+
+          preservedThreads.push(
+            freshUpdatedAt !== (existing.updatedAt ?? 0)
+              ? { ...existing, updatedAt: freshUpdatedAt }
+              : existing,
+          );
+        }
+      }
+
+      const merged = [...freshenedThreads, ...preservedThreads];
+      const sorted = prefersUpdatedSort(state, action.workspaceId)
+        ? sortThreadsByUpdatedAtDesc(merged)
+        : merged;
+
       return {
         ...state,
         threadsByWorkspace: {
           ...state.threadsByWorkspace,
-          [action.workspaceId]: visibleThreads,
+          [action.workspaceId]: sorted,
         },
         threadSortKeyByWorkspace: {
           ...state.threadSortKeyByWorkspace,

@@ -9,7 +9,11 @@ import type {
   WorkspaceInfo,
 } from "@/types";
 import type { OpenCodeServerStatus } from "@services/tauri";
-import { getOpenCodeServerStatus, restartOpenCodeServer } from "@services/tauri";
+import {
+  getOpenCodeServerStatus,
+  restartOpenCodeServer,
+  takeoverOpenCodeServer,
+} from "@services/tauri";
 import { useGlobalAgentsMd } from "./useGlobalAgentsMd";
 import { useGlobalOpenCodeConfig } from "./useGlobalCodexConfigToml";
 import { useSettingsDefaultModels } from "./useSettingsDefaultModels";
@@ -51,8 +55,10 @@ export type SettingsCodexSectionProps = {
   opencodeServerStatusError: string | null;
   opencodeServerStatusLastCheckedAt: number | null;
   opencodeServerRestarting: boolean;
+  opencodeServerTakingOver: boolean;
   onRefreshOpenCodeServerStatus: () => void;
   onRestartOpenCodeServer: () => void;
+  onTakeoverOpenCodeServer: () => void;
   codexPathDraft: string;
   codexArgsDraft: string;
   codexDirty: boolean;
@@ -144,6 +150,7 @@ export const useSettingsCodexSection = ({
     number | null
   >(null);
   const [opencodeServerRestarting, setOpenCodeServerRestarting] = useState(false);
+  const [opencodeServerTakingOver, setOpenCodeServerTakingOver] = useState(false);
 
   const {
     models: defaultModels,
@@ -349,6 +356,25 @@ export const useSettingsCodexSection = ({
     }
   };
 
+  const handleTakeoverOpenCodeServer = async () => {
+    setOpenCodeServerTakingOver(true);
+    setOpenCodeServerStatusError(null);
+    try {
+      const result = await takeoverOpenCodeServer();
+      if (result?.status) {
+        setOpenCodeServerStatus(result.status);
+        setOpenCodeServerStatusLastCheckedAt(Date.now());
+      } else {
+        await refreshOpenCodeServerStatus();
+      }
+      await refreshDefaultModels();
+    } catch (error) {
+      setOpenCodeServerStatusError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpenCodeServerTakingOver(false);
+    }
+  };
+
   return {
     appSettings,
     onUpdateAppSettings,
@@ -364,11 +390,15 @@ export const useSettingsCodexSection = ({
     opencodeServerStatusError,
     opencodeServerStatusLastCheckedAt,
     opencodeServerRestarting,
+    opencodeServerTakingOver,
     onRefreshOpenCodeServerStatus: () => {
       void refreshOpenCodeServerStatus();
     },
     onRestartOpenCodeServer: () => {
       void handleRestartOpenCodeServer();
+    },
+    onTakeoverOpenCodeServer: () => {
+      void handleTakeoverOpenCodeServer();
     },
     codexPathDraft,
     codexArgsDraft,

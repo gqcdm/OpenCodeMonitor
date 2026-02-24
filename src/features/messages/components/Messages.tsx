@@ -60,6 +60,7 @@ type MessagesProps = {
   onPlanAccept?: () => void;
   onPlanSubmitChanges?: (changes: string) => void;
   onOpenThreadLink?: (threadId: string) => void;
+  onQuoteMessage?: (text: string) => void;
 };
 
 export const Messages = memo(function Messages({
@@ -81,6 +82,7 @@ export const Messages = memo(function Messages({
   onPlanAccept,
   onPlanSubmitChanges,
   onOpenThreadLink,
+  onQuoteMessage,
 }: MessagesProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -292,6 +294,22 @@ export const Messages = memo(function Messages({
     [],
   );
 
+  const toMarkdownQuote = useCallback((text: string): string => {
+    return text
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+  }, []);
+
+  const handleQuoteMessage = useCallback(
+    (item: Extract<ConversationItem, { kind: "message" }>) => {
+      if (!onQuoteMessage) return;
+      const quoted = toMarkdownQuote(item.text);
+      onQuoteMessage(quoted + "\n\n");
+    },
+    [onQuoteMessage, toMarkdownQuote],
+  );
+
   useLayoutEffect(() => {
     const container = containerRef.current;
     const shouldScroll =
@@ -415,6 +433,7 @@ export const Messages = memo(function Messages({
           item={item}
           isCopied={isCopied}
           onCopy={handleCopyMessage}
+          onQuote={item.role === "assistant" ? handleQuoteMessage : undefined}
           codeBlockCopyUseModifier={codeBlockCopyUseModifier}
           showMessageFilePath={showMessageFilePath}
           workspacePath={workspacePath}

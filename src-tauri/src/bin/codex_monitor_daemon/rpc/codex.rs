@@ -256,6 +256,7 @@ pub(super) async fn try_handle(
         }
         "opencode_server_status" => Some(state.opencode_server_status().await),
         "opencode_server_restart" => Some(state.opencode_server_restart().await),
+        "opencode_server_takeover" => Some(state.opencode_server_takeover().await),
         "collaboration_mode_list" => {
             let workspace_id = match parse_string(params, "workspaceId") {
                 Ok(value) => value,

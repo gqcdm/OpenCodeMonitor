@@ -16,7 +16,8 @@ type SettingsSection =
   | "shortcuts"
   | "open-apps"
   | "git"
-  | "server";
+  | "server"
+  | "about";
 
 export type CodexSection = SettingsSection | "codex" | "features";
 

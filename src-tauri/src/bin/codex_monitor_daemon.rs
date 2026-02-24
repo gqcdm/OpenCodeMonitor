@@ -845,6 +845,14 @@ impl DaemonState {
         backend::app_server::restart_opencode_server(codex_bin, codex_args.as_deref()).await
     }
 
+    async fn opencode_server_takeover(&self) -> Result<Value, String> {
+        let (codex_bin, codex_args) = {
+            let settings = self.app_settings.lock().await;
+            (settings.codex_bin.clone(), settings.codex_args.clone())
+        };
+        backend::app_server::takeover_external_server(codex_bin, codex_args.as_deref()).await
+    }
+
     async fn collaboration_mode_list(&self, workspace_id: String) -> Result<Value, String> {
         codex_core::collaboration_mode_list_core(&self.sessions, workspace_id).await
     }

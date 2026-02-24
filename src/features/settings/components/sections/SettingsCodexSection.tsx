@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useCallback } from "react";
+import { ask } from "@tauri-apps/plugin-dialog";
 import Stethoscope from "lucide-react/dist/esm/icons/stethoscope";
 import type { Dispatch, SetStateAction } from "react";
 import type {
@@ -25,8 +26,10 @@ type SettingsCodexSectionProps = {
   opencodeServerStatusError: string | null;
   opencodeServerStatusLastCheckedAt: number | null;
   opencodeServerRestarting: boolean;
+  opencodeServerTakingOver: boolean;
   onRefreshOpenCodeServerStatus: () => void;
   onRestartOpenCodeServer: () => void;
+  onTakeoverOpenCodeServer: () => void;
   codexPathDraft: string;
   codexArgsDraft: string;
   codexDirty: boolean;
@@ -144,8 +147,10 @@ export function SettingsCodexSection({
   opencodeServerStatusError,
   opencodeServerStatusLastCheckedAt,
   opencodeServerRestarting,
+  opencodeServerTakingOver,
   onRefreshOpenCodeServerStatus,
   onRestartOpenCodeServer,
+  onTakeoverOpenCodeServer,
   codexPathDraft,
   codexArgsDraft,
   codexDirty,
@@ -188,6 +193,21 @@ export function SettingsCodexSection({
   onUpdateWorkspaceCodexBin,
   onUpdateWorkspaceSettings,
 }: SettingsCodexSectionProps) {
+  const handleTakeoverWithConfirmation = useCallback(async () => {
+    const confirmed = await ask(
+      "This will stop the existing OpenCode server and start a managed one. Continue?",
+      {
+        title: "Take Over Server",
+        kind: "warning",
+        okLabel: "Take Over",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (confirmed) {
+      onTakeoverOpenCodeServer();
+    }
+  }, [onTakeoverOpenCodeServer]);
+
   const groupedDefaultModels = useMemo(() => groupModelsByProvider(defaultModels), [defaultModels]);
   const latestModelId = defaultModels[0]?.id ?? null;
   const savedModelId = useMemo(
@@ -401,11 +421,22 @@ export function SettingsCodexSection({
             type="button"
             className="ghost settings-button-compact"
             onClick={onRestartOpenCodeServer}
-            disabled={opencodeServerRestarting}
+            disabled={opencodeServerRestarting || opencodeServerTakingOver}
             title="Restart the OpenCode server used by OpenCode Monitor"
           >
             {opencodeServerRestarting ? "Restarting..." : "Restart server"}
           </button>
+          {opencodeServerStatus?.source === "external" && (
+            <button
+              type="button"
+              className="ghost settings-button-compact"
+              onClick={() => void handleTakeoverWithConfirmation()}
+              disabled={opencodeServerTakingOver || opencodeServerRestarting}
+              title="Stop the external server and start a managed one"
+            >
+              {opencodeServerTakingOver ? "Taking over..." : "Take Over"}
+            </button>
+          )}
         </div>
 
         {doctorState.result && (

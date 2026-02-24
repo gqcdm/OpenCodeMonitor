@@ -562,6 +562,12 @@ export async function restartOpenCodeServer() {
   return invoke<{ restarted: boolean; status?: OpenCodeServerStatus }>("opencode_server_restart");
 }
 
+export async function takeoverOpenCodeServer() {
+  return invoke<{ takenOver: boolean; status?: OpenCodeServerStatus }>(
+    "opencode_server_takeover",
+  );
+}
+
 export async function generateRunMetadata(workspaceId: string, prompt: string) {
   return invoke<{ title: string; worktreeName: string }>("generate_run_metadata", {
     workspaceId,

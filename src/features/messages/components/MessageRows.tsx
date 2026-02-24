@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import Brain from "lucide-react/dist/esm/icons/brain";
 import Check from "lucide-react/dist/esm/icons/check";
 import Copy from "lucide-react/dist/esm/icons/copy";
+import Quote from "lucide-react/dist/esm/icons/quote";
 import Diff from "lucide-react/dist/esm/icons/diff";
 import FileDiff from "lucide-react/dist/esm/icons/file-diff";
 import FileText from "lucide-react/dist/esm/icons/file-text";
@@ -53,6 +54,7 @@ type MessageRowProps = MarkdownFileLinkProps & {
   item: Extract<ConversationItem, { kind: "message" }>;
   isCopied: boolean;
   onCopy: (item: Extract<ConversationItem, { kind: "message" }>) => void;
+  onQuote?: (item: Extract<ConversationItem, { kind: "message" }>) => void;
   codeBlockCopyUseModifier?: boolean;
 };
 
@@ -321,6 +323,7 @@ export const MessageRow = memo(function MessageRow({
   item,
   isCopied,
   onCopy,
+  onQuote,
   codeBlockCopyUseModifier,
   showMessageFilePath,
   workspacePath,
@@ -375,18 +378,31 @@ export const MessageRow = memo(function MessageRow({
             onClose={() => setLightboxIndex(null)}
           />
         )}
-        <button
-          type="button"
-          className={`ghost message-copy-button${isCopied ? " is-copied" : ""}`}
-          onClick={() => onCopy(item)}
-          aria-label="Copy message"
-          title="Copy message"
-        >
-          <span className="message-copy-icon" aria-hidden>
-            <Copy className="message-copy-icon-copy" size={14} />
-            <Check className="message-copy-icon-check" size={14} />
-          </span>
-        </button>
+        <div className="message-actions">
+          {onQuote && (
+            <button
+              type="button"
+              className="ghost message-quote-button"
+              onClick={() => onQuote(item)}
+              aria-label="Quote message"
+              title="Quote message"
+            >
+              <Quote size={14} />
+            </button>
+          )}
+          <button
+            type="button"
+            className={`ghost message-copy-button${isCopied ? " is-copied" : ""}`}
+            onClick={() => onCopy(item)}
+            aria-label="Copy message"
+            title="Copy message"
+          >
+            <span className="message-copy-icon" aria-hidden>
+              <Copy className="message-copy-icon-copy" size={14} />
+              <Check className="message-copy-icon-check" size={14} />
+            </span>
+          </button>
+        </div>
       </div>
     </div>
   );

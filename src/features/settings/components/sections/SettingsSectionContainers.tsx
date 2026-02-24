@@ -1,3 +1,4 @@
+import { SettingsAboutSection } from "./SettingsAboutSection";
 import { SettingsCodexSection } from "./SettingsCodexSection";
 import { SettingsComposerSection } from "./SettingsComposerSection";
 import { SettingsDictationSection } from "./SettingsDictationSection";
@@ -53,6 +54,9 @@ export function SettingsSectionContainers({
   }
   if (activeSection === "features") {
     return <SettingsFeaturesSection {...orchestration.featuresSectionProps} />;
+  }
+  if (activeSection === "about") {
+    return <SettingsAboutSection />;
   }
   return null;
 }

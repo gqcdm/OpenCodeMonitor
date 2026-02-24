@@ -35,6 +35,7 @@ vi.mock("@services/tauri", async () => {
       version: "test",
     }),
     restartOpenCodeServer: vi.fn().mockResolvedValue({ restarted: true }),
+    takeoverOpenCodeServer: vi.fn().mockResolvedValue({ takenOver: true }),
   };
 });
 

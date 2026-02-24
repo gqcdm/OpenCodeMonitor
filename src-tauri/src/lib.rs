@@ -61,6 +61,7 @@ async fn stop_managed_daemons_for_exit(app_handle: tauri::AppHandle) {
     let _ = orbit::orbit_runner_stop(state).await;
     let state = app_handle.state::<state::AppState>();
     let _ = tailscale::tailscale_daemon_stop(state).await;
+    backend::app_server::shutdown_server().await;
 }
 
 #[tauri::command]
@@ -279,6 +280,7 @@ pub fn run() {
             codex::settings_model_list,
             codex::opencode_server_status,
             codex::opencode_server_restart,
+            codex::opencode_server_takeover,
             codex::account_rate_limits,
             codex::account_read,
             codex::codex_login,

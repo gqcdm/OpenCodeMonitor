@@ -10,7 +10,7 @@ const SKILL_LOCATIONS = [
       "opencode",
       "skill",
       "project-memory",
-      "SKILL.md"
+      "SKILL.md",
     ),
   () =>
     path.join(
@@ -18,7 +18,7 @@ const SKILL_LOCATIONS = [
       ".claude",
       "skills",
       "project-memory",
-      "SKILL.md"
+      "SKILL.md",
     ),
 ];
 
@@ -83,16 +83,15 @@ export const MemoryHook = async (ctx) => {
       if (!Array.isArray(todos)) return;
       if (!todos.some((t) => t.status === "completed")) return;
 
-      output.output += `\n\n<system-reminder>Task completed. If this work produced knowledge worth remembering (re-discovering would cost meaningful time), capture it to .memory/ following the project-memory skill. Only save decisions, patterns, bug root causes, or preferences — skip routine changes.</system-reminder>`;
+      output.output += `\n\n<system-reminder>Task completed. If this work produced knowledge worth remembering (re-discovering would cost meaningful time), capture it to .memory/ following the project-memory skill. Only save decisions, bug root causes, or preferences — skip routine changes.</system-reminder>`;
     },
 
-    "event": async ({ event }) => {
+    event: async ({ event }) => {
       if (
         event.type === "session.deleted" ||
         event.type === "session.compacted"
       ) {
-        const sid =
-          event.properties?.info?.id || event.properties?.sessionID;
+        const sid = event.properties?.info?.id || event.properties?.sessionID;
         if (sid) {
           loadedSessions.delete(sid);
           subagentSessions.delete(sid);

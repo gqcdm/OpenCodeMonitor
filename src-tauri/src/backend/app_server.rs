@@ -59,6 +59,157 @@ fn rest_base_url() -> String {
     format!("http://127.0.0.1:{REST_PORT}")
 }
 
+// ---------------------------------------------------------------------------
+// PID file management for server ownership tracking
+// ---------------------------------------------------------------------------
+
+/// Metadata stored in the PID file to track server ownership.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+struct PidFileData {
+    pid: u32,
+    port: u16,
+    started_at: String,
+}
+
+/// Returns the path to the PID file (~/.opencode-monitor/server.pid).
+fn pid_file_path() -> Option<PathBuf> {
+    let home = env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".opencode-monitor").join("server.pid"))
+}
+
+/// Write PID file after starting the server.
+async fn write_pid_file(pid: u32, port: u16) -> Result<(), String> {
+    let path = pid_file_path().ok_or("Could not determine PID file path")?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create PID file directory: {e}"))?;
+    }
+    let data = PidFileData {
+        pid,
+        port,
+        started_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    tokio::fs::write(&path, json)
+        .await
+        .map_err(|e| format!("Failed to write PID file: {e}"))
+}
+
+/// Read and parse PID file. Returns None if file doesn't exist or is invalid.
+async fn read_pid_file() -> Option<PidFileData> {
+    let path = pid_file_path()?;
+    let contents = tokio::fs::read_to_string(&path).await.ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// Delete PID file.
+async fn delete_pid_file() {
+    if let Some(path) = pid_file_path() {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+}
+
+/// Check if a process with the given PID is still running.
+fn is_process_running(pid: u32) -> bool {
+    // kill(pid, 0) checks if process exists without sending a signal
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+/// Try to reclaim an orphaned server (one we previously started but lost track of).
+/// Returns true if we successfully reclaimed, false otherwise.
+async fn try_reclaim_orphaned_server() -> bool {
+    let pid_data = match read_pid_file().await {
+        Some(data) => data,
+        None => return false,
+    };
+
+    // Check if the process is still running
+    if !is_process_running(pid_data.pid) {
+        // Stale PID file, clean it up
+        delete_pid_file().await;
+        return false;
+    }
+
+    // Process is running - check if it's actually our server on the expected port
+    let base_url = rest_base_url();
+    if health_check(&base_url).await.is_err() {
+        // Process exists but isn't responding as our server - stale PID file
+        delete_pid_file().await;
+        return false;
+    }
+
+    // Server is alive and healthy - this is an orphaned server we can reclaim
+    // We can't actually adopt the Child handle, but we can track that we own it via PID
+    true
+}
+
+/// Kill process listening on the REST port (for takeover functionality).
+#[cfg(target_os = "macos")]
+async fn kill_process_on_port(port: u16) -> Result<(), String> {
+    use tokio::process::Command;
+
+    // Use lsof to find the PID
+    let output = Command::new("lsof")
+        .args(["-ti", &format!(":{port}")])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run lsof: {e}"))?;
+
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err(format!("No process found on port {port}"));
+    }
+
+    let pids: Vec<&str> = std::str::from_utf8(&output.stdout)
+        .map_err(|e| e.to_string())?
+        .trim()
+        .lines()
+        .collect();
+
+    for pid_str in pids {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+        }
+    }
+
+    // Wait briefly for process to terminate
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Force kill if still running
+    let output = Command::new("lsof")
+        .args(["-ti", &format!(":{port}")])
+        .output()
+        .await
+        .ok();
+
+    if let Some(out) = output {
+        if out.status.success() && !out.stdout.is_empty() {
+            let pids: Vec<&str> = std::str::from_utf8(&out.stdout)
+                .unwrap_or("")
+                .trim()
+                .lines()
+                .collect();
+            for pid_str in pids {
+                if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn kill_process_on_port(_port: u16) -> Result<(), String> {
+    Err("Takeover is only supported on macOS".to_string())
+}
+
 async fn start_managed_server_process(
     codex_bin: Option<String>,
     codex_args: Option<&str>,
@@ -86,6 +237,13 @@ async fn start_managed_server_process(
         }
     })?;
 
+    // Write PID file for ownership tracking
+    if let Some(pid) = child.id() {
+        if let Err(e) = write_pid_file(pid, REST_PORT).await {
+            eprintln!("Warning: failed to write PID file: {e}");
+        }
+    }
+
     let start = std::time::Instant::now();
     let health_timeout = Duration::from_secs(30);
     loop {
@@ -109,6 +267,12 @@ async fn ensure_server_running(
 
     // Fast path: if already initialized, just return the URL.
     if SERVER_PROCESS.get().is_some() {
+        return Ok(base_url);
+    }
+
+    // Check if we have an orphaned server we can reclaim (via PID file).
+    // This happens when the app crashed/exited but the server kept running.
+    if try_reclaim_orphaned_server().await {
         return Ok(base_url);
     }
 
@@ -171,9 +335,23 @@ pub(crate) async fn global_rest_get(
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }
 
+/// Check if we own the server (either via Child handle or PID file).
+async fn is_server_owned() -> bool {
+    if SERVER_PROCESS.get().is_some() {
+        return true;
+    }
+    // Check if we have a valid PID file for the running server
+    if let Some(pid_data) = read_pid_file().await {
+        if is_process_running(pid_data.pid) && pid_data.port == REST_PORT {
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) async fn opencode_server_status() -> Value {
     let base_url = rest_base_url();
-    let managed = SERVER_PROCESS.get().is_some();
+    let managed = is_server_owned().await;
     match health_check(&base_url).await {
         Ok(health) => json!({
             "baseUrl": base_url,
@@ -199,9 +377,12 @@ pub(crate) async fn restart_opencode_server(
     codex_args: Option<&str>,
 ) -> Result<Value, String> {
     let base_url = rest_base_url();
+
+    // Case 1: We have the Child handle - kill and replace
     if let Some(server_mutex) = SERVER_PROCESS.get() {
         let mut guard = server_mutex.lock().await;
         let _ = kill_child_process_tree(&mut guard.child).await;
+        delete_pid_file().await;
         let replacement = start_managed_server_process(codex_bin, codex_args).await?;
         *guard = replacement;
         return Ok(json!({
@@ -210,12 +391,44 @@ pub(crate) async fn restart_opencode_server(
         }));
     }
 
+    // Case 2: We have a PID file (reclaimed server) - kill by PID and start fresh
+    // Verify port matches to avoid killing an unrelated process if the PID was reused.
+    if let Some(pid_data) = read_pid_file().await {
+        if is_process_running(pid_data.pid) && pid_data.port == REST_PORT {
+            unsafe {
+                libc::kill(pid_data.pid as i32, libc::SIGTERM);
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if is_process_running(pid_data.pid) {
+                unsafe {
+                    libc::kill(pid_data.pid as i32, libc::SIGKILL);
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+        delete_pid_file().await;
+
+        let _ = SERVER_PROCESS
+            .get_or_try_init(|| async {
+                let server = start_managed_server_process(codex_bin, codex_args).await?;
+                Ok::<Mutex<ServerProcess>, String>(Mutex::new(server))
+            })
+            .await?;
+
+        return Ok(json!({
+            "restarted": true,
+            "status": opencode_server_status().await,
+        }));
+    }
+
+    // Case 3: External server - refuse to restart
     if health_check(&base_url).await.is_ok() {
         return Err(format!(
             "OpenCode server at {base_url} is running but is not managed by OpenCode Monitor. Stop it manually, then retry."
         ));
     }
 
+    // Case 4: No server running - start one
     let _ = SERVER_PROCESS
         .get_or_try_init(|| async {
             let server = start_managed_server_process(codex_bin, codex_args).await?;
@@ -225,6 +438,46 @@ pub(crate) async fn restart_opencode_server(
 
     Ok(json!({
         "restarted": true,
+        "status": opencode_server_status().await,
+    }))
+}
+
+/// Take over an external server by killing it and starting a managed one.
+pub(crate) async fn takeover_external_server(
+    codex_bin: Option<String>,
+    codex_args: Option<&str>,
+) -> Result<Value, String> {
+    let base_url = rest_base_url();
+
+    // If we already own the server, just restart it normally
+    if is_server_owned().await {
+        return restart_opencode_server(codex_bin, codex_args).await;
+    }
+
+    // Check if there's actually a server to take over
+    if health_check(&base_url).await.is_err() {
+        return Err("No server running to take over.".to_string());
+    }
+
+    // Kill whatever is on the port
+    kill_process_on_port(REST_PORT).await?;
+
+    // Verify it's gone
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    if health_check(&base_url).await.is_ok() {
+        return Err("Failed to stop external server.".to_string());
+    }
+
+    // Start our managed server
+    let _ = SERVER_PROCESS
+        .get_or_try_init(|| async {
+            let server = start_managed_server_process(codex_bin, codex_args).await?;
+            Ok::<Mutex<ServerProcess>, String>(Mutex::new(server))
+        })
+        .await?;
+
+    Ok(json!({
+        "takenOver": true,
         "status": opencode_server_status().await,
     }))
 }
@@ -811,6 +1064,7 @@ pub(crate) async fn shutdown_server() {
         let mut server = server_mutex.lock().await;
         let _ = kill_child_process_tree(&mut server.child).await;
     }
+    delete_pid_file().await;
 }
 
 // ---------------------------------------------------------------------------

@@ -10,7 +10,9 @@ pub(crate) mod home;
 
 use crate::backend::app_server::{
     global_rest_get, opencode_server_status as app_server_status,
-    restart_opencode_server as app_server_restart, spawn_workspace_session as spawn_workspace_session_inner,
+    restart_opencode_server as app_server_restart,
+    spawn_workspace_session as spawn_workspace_session_inner,
+    takeover_external_server as app_server_takeover,
 };
 pub(crate) use crate::backend::app_server::WorkspaceSession;
 use crate::backend::events::AppServerEvent;
@@ -558,6 +560,22 @@ pub(crate) async fn opencode_server_restart(
         (settings.codex_bin.clone(), settings.codex_args.clone())
     };
     app_server_restart(codex_bin, codex_args.as_deref()).await
+}
+
+#[tauri::command]
+pub(crate) async fn opencode_server_takeover(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(&*state, app, "opencode_server_takeover", json!({}))
+            .await;
+    }
+    let (codex_bin, codex_args) = {
+        let settings = state.app_settings.lock().await;
+        (settings.codex_bin.clone(), settings.codex_args.clone())
+    };
+    app_server_takeover(codex_bin, codex_args.as_deref()).await
 }
 
 #[tauri::command]

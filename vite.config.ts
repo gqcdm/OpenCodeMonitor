@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vitest/config";
@@ -11,6 +12,25 @@ const packageJson = JSON.parse(
 ) as {
   version: string;
 };
+
+function getGitInfo() {
+  try {
+    const commitHash = execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+    const gitBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8" }).trim();
+    const commitDate = execSync("git log -1 --format=%ci", { encoding: "utf-8" }).trim();
+    const buildDate = new Date().toISOString();
+    return { commitHash, gitBranch, commitDate, buildDate };
+  } catch {
+    return {
+      commitHash: "unknown",
+      gitBranch: "unknown",
+      commitDate: "unknown",
+      buildDate: new Date().toISOString(),
+    };
+  }
+}
+
+const gitInfo = getGitInfo();
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -30,6 +50,9 @@ export default defineConfig(async () => ({
   },
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
+    __APP_COMMIT_HASH__: JSON.stringify(gitInfo.commitHash),
+    __APP_BUILD_DATE__: JSON.stringify(gitInfo.buildDate),
+    __APP_GIT_BRANCH__: JSON.stringify(gitInfo.gitBranch),
   },
   test: {
     environment: "node",

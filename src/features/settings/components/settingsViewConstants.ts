@@ -111,6 +111,7 @@ export const SETTINGS_SECTION_LABELS: Record<CodexSection, string> = {
   server: "Server",
   codex: "OpenCode",
   features: "Features",
+  about: "About",
 };
 
 export const SHORTCUT_DRAFT_KEY_BY_SETTING: Record<
