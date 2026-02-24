@@ -611,14 +611,48 @@ describe("threadItems", () => {
       receiverThreadIds: ["thread-b"],
       newThreadId: "thread-c",
       prompt: "Coordinate work",
-      agentStatus: { "agent-1": { status: "running" } },
+      agentStatus: { explore: { status: "running" } },
     });
     expect(item).not.toBeNull();
     if (item && item.kind === "tool") {
-      expect(item.title).toBe("Collab: handoff");
+      expect(item.title).toBe("Explore Agent");
       expect(item.detail).toContain("From thread-a");
       expect(item.detail).toContain("thread-b, thread-c");
-      expect(item.output).toBe("Coordinate work\n\nagent-1: running");
+      expect(item.output).toBe("Coordinate work\n\nexplore: running");
+    }
+  });
+
+  it("formats collab tool calls with multiple agents", () => {
+    const item = buildConversationItem({
+      type: "collabToolCall",
+      id: "collab-2",
+      tool: "task",
+      status: "ok",
+      senderThreadId: "thread-a",
+      prompt: "Run parallel agents",
+      agentStatus: {
+        explore: { status: "running" },
+        librarian: { status: "completed" },
+      },
+    });
+    expect(item).not.toBeNull();
+    if (item && item.kind === "tool") {
+      expect(item.title).toBe("Explore Agent, Librarian Agent");
+    }
+  });
+
+  it("formats collab tool calls with fallback when no agent status", () => {
+    const item = buildConversationItem({
+      type: "collabToolCall",
+      id: "collab-3",
+      tool: "task",
+      status: "ok",
+      senderThreadId: "thread-a",
+      prompt: "Unknown agent",
+    });
+    expect(item).not.toBeNull();
+    if (item && item.kind === "tool") {
+      expect(item.title).toBe("Subagent");
     }
   });
 

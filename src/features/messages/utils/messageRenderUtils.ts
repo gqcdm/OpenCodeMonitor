@@ -330,6 +330,14 @@ export function buildToolSummary(
     }
   }
 
+  if (item.toolType === "collabToolCall") {
+    return {
+      label: "",
+      value: item.title,
+      output: item.output || "",
+    };
+  }
+
   return {
     label: "tool",
     value: item.title || "",

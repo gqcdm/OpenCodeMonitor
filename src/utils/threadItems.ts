@@ -84,6 +84,18 @@ function formatCollabAgentStates(value: unknown) {
   return entries.join("\n");
 }
 
+function formatCollabAgentTitle(agentStatus: unknown): string {
+  if (!agentStatus || typeof agentStatus !== "object") {
+    return "Subagent";
+  }
+  const agents = Object.keys(agentStatus as Record<string, unknown>)
+    .map((name) => name.charAt(0).toUpperCase() + name.slice(1) + " Agent")
+    .filter(Boolean);
+
+  if (agents.length === 0) return "Subagent";
+  return agents.join(", ");
+}
+
 export function normalizeItem(item: ConversationItem): ConversationItem {
   if (item.kind === "message") {
     return { ...item, text: truncateText(item.text) };
@@ -743,7 +755,6 @@ export function buildConversationItem(
     };
   }
   if (type === "collabToolCall" || type === "collabAgentToolCall") {
-    const tool = asString(item.tool ?? "");
     const status = asString(item.status ?? "");
     const sender = asString(item.senderThreadId ?? item.sender_thread_id ?? "");
     const receivers = [
@@ -752,9 +763,8 @@ export function buildConversationItem(
       ...normalizeStringList(item.newThreadId ?? item.new_thread_id),
     ];
     const prompt = asString(item.prompt ?? "");
-    const agentsState = formatCollabAgentStates(
-      item.agentStatus ?? item.agentsStates ?? item.agents_states,
-    );
+    const agentStatusObj = item.agentStatus ?? item.agentsStates ?? item.agents_states;
+    const agentsState = formatCollabAgentStates(agentStatusObj);
     const detailParts = [sender ? `From ${sender}` : ""]
       .concat(receivers.length > 0 ? `→ ${receivers.join(", ")}` : "")
       .filter(Boolean);
@@ -763,7 +773,7 @@ export function buildConversationItem(
       id,
       kind: "tool",
       toolType: "collabToolCall",
-      title: tool ? `Collab: ${tool}` : "Collab tool call",
+      title: formatCollabAgentTitle(agentStatusObj),
       detail: detailParts.join(" "),
       status,
       output: outputParts.join("\n\n"),
