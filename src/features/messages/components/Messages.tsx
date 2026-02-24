@@ -207,6 +207,25 @@ export const Messages = memo(function Messages({
     [items, reasoningMetaById],
   );
 
+  const hasVisibleReasoningInActiveTail = useMemo(() => {
+    for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
+      const item = visibleItems[index];
+      if (item.kind === "message") {
+        break;
+      }
+      if (item.kind !== "reasoning") {
+        continue;
+      }
+      if (reasoningMetaById.get(item.id)?.workingLabel) {
+        return true;
+      }
+    }
+    return false;
+  }, [visibleItems, reasoningMetaById]);
+
+  const workingReasoningLabel =
+    isThinking && hasVisibleReasoningInActiveTail ? null : latestReasoningLabel;
+
   useEffect(() => {
     const itemsToExpand: string[] = [];
     for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
@@ -517,7 +536,7 @@ export const Messages = memo(function Messages({
         processingStartedAt={processingStartedAt}
         lastDurationMs={lastDurationMs}
         hasItems={items.length > 0}
-        reasoningLabel={latestReasoningLabel}
+        reasoningLabel={workingReasoningLabel}
       />
       {!items.length && !userInputNode && !isThinking && !isLoadingMessages && (
         <div className="empty messages-empty">

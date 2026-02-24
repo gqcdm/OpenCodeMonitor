@@ -815,6 +815,32 @@
   color: var(--text-muted);
 }
 
+.reasoning-inline-title-only {
+  margin: 6px 0 10px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.reasoning-inline-title-only .tool-inline-content {
+  gap: 4px;
+}
+
+.reasoning-inline-title-only .tool-inline-summary {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.reasoning-inline-title-only .tool-inline-value {
+  font-weight: 600;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.reasoning-inline-title-only .tool-inline-icon.processing {
+  color: var(--status-success);
+}
+
 .tool-command {
   display: flex;
   flex-direction: column;

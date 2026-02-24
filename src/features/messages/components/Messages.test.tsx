@@ -335,7 +335,7 @@ describe("Messages", () => {
     expect(useFileLinkOpenerMock).toHaveBeenCalledTimes(1);
   });
 
-  it("renders title-only reasoning rows and uses reasoning title for the working indicator", () => {
+  it("renders title-only reasoning rows and keeps the working indicator generic", () => {
     const items: ConversationItem[] = [
       {
         id: "reasoning-1",
@@ -358,7 +358,8 @@ describe("Messages", () => {
     );
 
     const workingText = container.querySelector(".working-text");
-    expect(workingText?.textContent ?? "").toContain("Scanning repository");
+    expect(workingText?.textContent ?? "").toContain("Working");
+    expect(workingText?.textContent ?? "").not.toContain("Scanning repository");
     expect(container.querySelector(".reasoning-inline")).toBeTruthy();
   });
 
@@ -388,7 +389,8 @@ describe("Messages", () => {
     const reasoningDetail = container.querySelector(".reasoning-inline-detail");
     expect(reasoningDetail?.textContent ?? "").toContain("Looking for entry points");
     const workingText = container.querySelector(".working-text");
-    expect(workingText?.textContent ?? "").toContain("Scanning repository");
+    expect(workingText?.textContent ?? "").toContain("Working");
+    expect(workingText?.textContent ?? "").not.toContain("Scanning repository");
   });
 
   it("uses content for the reasoning title when summary is empty", () => {
@@ -414,7 +416,8 @@ describe("Messages", () => {
     );
 
     const workingText = container.querySelector(".working-text");
-    expect(workingText?.textContent ?? "").toContain("Plan from content");
+    expect(workingText?.textContent ?? "").toContain("Working");
+    expect(workingText?.textContent ?? "").not.toContain("Plan from content");
     const reasoningDetail = container.querySelector(".reasoning-inline-detail");
     expect(reasoningDetail?.textContent ?? "").toContain("More detail here");
     expect(reasoningDetail?.textContent ?? "").not.toContain("Plan from content");
@@ -453,7 +456,7 @@ describe("Messages", () => {
     expect(workingText?.textContent ?? "").not.toContain("Old reasoning title");
   });
 
-  it("keeps the latest title-only reasoning label while rendering a reasoning row", () => {
+  it("renders the title-only reasoning row and keeps the working indicator generic", () => {
     const items: ConversationItem[] = [
       {
         id: "reasoning-title-only",
@@ -485,7 +488,8 @@ describe("Messages", () => {
     );
 
     const workingText = container.querySelector(".working-text");
-    expect(workingText?.textContent ?? "").toContain("Indexing workspace");
+    expect(workingText?.textContent ?? "").toContain("Working");
+    expect(workingText?.textContent ?? "").not.toContain("Indexing workspace");
     expect(container.querySelector(".reasoning-inline")).toBeTruthy();
   });
 

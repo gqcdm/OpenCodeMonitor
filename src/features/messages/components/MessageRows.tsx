@@ -405,7 +405,11 @@ export const ReasoningRow = memo(function ReasoningRow({
   const { summaryTitle, bodyText, hasBody } = parsed;
   const reasoningTone: StatusTone = hasBody ? "completed" : "processing";
   return (
-    <div className="tool-inline reasoning-inline">
+    <div
+      className={`tool-inline reasoning-inline ${
+        hasBody ? "reasoning-inline-with-body" : "reasoning-inline-title-only"
+      }`}
+    >
       <button
         type="button"
         className="tool-inline-bar-toggle"
