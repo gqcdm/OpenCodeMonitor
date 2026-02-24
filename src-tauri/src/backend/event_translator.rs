@@ -117,13 +117,19 @@ impl SessionTranslationState {
     pub(crate) fn start_turn(&mut self, session_id: String, turn_id: String) {
         self.session_id = session_id.clone();
         let turn_state = self.session_turns.entry(session_id).or_default();
+        // User prompt parts can arrive before `session.status=active` (common for
+        // subagent sessions). Preserve the in-progress user message so later chunks
+        // keep merging into the same frontend item instead of creating a duplicate.
+        let preserved_user_message_item_id = turn_state.user_message_item_id.clone();
+        let preserved_user_message_text = turn_state.user_message_text.clone();
         turn_state.turn_id = turn_id;
         turn_state.tool_call_items.clear();
         turn_state.agent_message_item_id = None;
+        turn_state.agent_message_part_id = None;
         turn_state.reasoning_item_id = None;
         turn_state.reasoning_part_id = None;
-        turn_state.user_message_item_id = None;
-        turn_state.user_message_text.clear();
+        turn_state.user_message_item_id = preserved_user_message_item_id;
+        turn_state.user_message_text = preserved_user_message_text;
     }
 
     /// Prepare translation state for replaying historical messages.
@@ -2389,6 +2395,77 @@ mod tests {
         assert_eq!(
             events1[0]["params"]["item"]["id"],
             events2[0]["params"]["item"]["id"]
+        );
+    }
+
+    #[test]
+    fn session_active_preserves_in_progress_user_message_stream_state() {
+        let mut state = make_state();
+
+        let _ = translate_sse_event(
+            &json!({
+                "type": "message.updated",
+                "properties": {
+                    "info": {
+                        "id": "msg_user_1",
+                        "sessionID": "ses_test123",
+                        "role": "user"
+                    }
+                }
+            }),
+            &mut state,
+        );
+
+        let first = translate_sse_event(
+            &json!({
+                "type": "message.part.updated",
+                "properties": {
+                    "part": {
+                        "type": "text",
+                        "id": "prt_user_text_1",
+                        "sessionID": "ses_test123",
+                        "messageID": "msg_user_1",
+                        "text": "Give me a quick summary"
+                    }
+                }
+            }),
+            &mut state,
+        );
+        let first_item_id = first[0]["params"]["item"]["id"].clone();
+
+        let active_events = translate_sse_event(
+            &json!({
+                "type": "session.status",
+                "properties": {
+                    "sessionID": "ses_test123",
+                    "status": { "type": "active" }
+                }
+            }),
+            &mut state,
+        );
+        assert_eq!(active_events.len(), 1);
+        assert_eq!(active_events[0]["method"], "turn/started");
+
+        let second = translate_sse_event(
+            &json!({
+                "type": "message.part.delta",
+                "properties": {
+                    "sessionID": "ses_test123",
+                    "messageID": "msg_user_1",
+                    "partID": "prt_user_text_1",
+                    "field": "text",
+                    "delta": " of the docs folder"
+                }
+            }),
+            &mut state,
+        );
+
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0]["method"], "item/completed");
+        assert_eq!(second[0]["params"]["item"]["id"], first_item_id);
+        assert_eq!(
+            second[0]["params"]["item"]["content"][0]["text"],
+            "Give me a quick summary of the docs folder"
         );
     }
 
