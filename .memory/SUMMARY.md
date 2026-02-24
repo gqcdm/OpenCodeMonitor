@@ -47,6 +47,17 @@
 - Agent/model selection from REST API
 - Incremental SSE streaming
 
----
+## Quick Stats
 
-*Last updated: Session initialization*
+- Total memories: 0
+- Last updated: 2025-02-24
+- Sessions since review: 0
+- Session tools available: true
+- Last bootstrap: 2025-02-24
+- Bootstrapped sessions: []
+- Project phase: foundation
+- Project phase epoch: 1
+- Close state: clean
+- Index dirty: false
+- Active session id: 2025-02-24-1
+- Last closed session id: ""

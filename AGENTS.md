@@ -180,4 +180,6 @@ Use extra care in high-churn/high-complexity files:
 - Frontend event contract: `docs/app-server-events.md`
 - For OpenCode API/feature changes, refer to `opencode-server-api.mdx` and `./tmp/opencode` before implementing protocol or behavior updates.
 
-##
+## Project Memory
+
+Load project memory: read .memory/SUMMARY.md before starting work. If .memory/ doesn't exist, initialize it per the project-memory skill.
