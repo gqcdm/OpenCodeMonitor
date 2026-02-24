@@ -29,6 +29,7 @@ CodexMonitor.zip
 .codex-worktrees/
 .codexmonitor/
 public/assets/material-icons/
+.opencode/
 
 # Nix
 result
