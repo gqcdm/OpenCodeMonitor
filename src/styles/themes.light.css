@@ -53,6 +53,9 @@
   --status-warning: rgba(215, 120, 20, 0.9);
   --status-error: rgba(200, 45, 45, 0.9);
   --status-unknown: rgba(17, 20, 28, 0.25);
+  --agent-color-build: rgba(30, 155, 110, 0.9);
+  --agent-color-plan: rgba(130, 80, 200, 0.9);
+  --agent-color-default: rgba(45, 130, 200, 0.9);
   --select-caret: rgba(15, 23, 36, 0.45);
 }
 

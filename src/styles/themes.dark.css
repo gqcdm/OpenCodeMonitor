@@ -73,6 +73,9 @@
   --status-warning: rgba(255, 175, 85, 0.95);
   --status-error: rgba(255, 110, 110, 0.95);
   --status-unknown: rgba(255, 255, 255, 0.3);
+  --agent-color-build: rgba(120, 235, 190, 0.95);
+  --agent-color-plan: rgba(196, 154, 255, 0.96);
+  --agent-color-default: rgba(100, 200, 255, 0.9);
   --select-caret: rgba(255, 255, 255, 0.6);
   --tabbar-height: 56px;
   --ui-scale: 1;

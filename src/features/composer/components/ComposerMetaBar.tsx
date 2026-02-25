@@ -138,7 +138,10 @@ export function ComposerMetaBar({
           </select>
         </div>
         {collaborationModes.length > 0 && (
-          <div className="composer-select-wrap">
+          <div
+            className="composer-select-wrap composer-select-wrap--agent"
+            data-agent={selectedCollaborationModeId ?? ""}
+          >
             <span className="composer-icon" aria-hidden>
               <Bot size={14} strokeWidth={1.8} />
             </span>

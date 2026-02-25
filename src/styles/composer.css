@@ -827,6 +827,21 @@
   color: var(--text-strong);
 }
 
+.composer-select-wrap--agent[data-agent] .composer-icon,
+.composer-select-wrap--agent[data-agent] .composer-select {
+  color: var(--agent-color-default);
+}
+
+.composer-select-wrap--agent[data-agent="build"] .composer-icon,
+.composer-select-wrap--agent[data-agent="build"] .composer-select {
+  color: var(--agent-color-build);
+}
+
+.composer-select-wrap--agent[data-agent="plan"] .composer-icon,
+.composer-select-wrap--agent[data-agent="plan"] .composer-select {
+  color: var(--agent-color-plan);
+}
+
 @media (max-width: 720px) {
   .app.layout-phone .composer-input {
     grid-template-columns: minmax(0, 1fr) auto;
