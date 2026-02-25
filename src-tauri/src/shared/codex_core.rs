@@ -470,6 +470,10 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
                             }
                         }),
                     });
+                    {
+                        let mut ts = session.translation_state.lock().await;
+                        ts.mark_new_replayed_user_message_boundary();
+                    }
                 } else {
                     replay_item_counter += 1;
                     let item_id = format!("replay_item_{replay_item_counter}");

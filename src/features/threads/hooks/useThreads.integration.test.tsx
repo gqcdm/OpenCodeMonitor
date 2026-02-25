@@ -31,11 +31,16 @@ vi.mock("@services/tauri", () => ({
   respondToServerRequest: vi.fn(),
   respondToUserInputRequest: vi.fn(),
   rememberApprovalRule: vi.fn(),
+  compactThread: vi.fn(),
+  executeSlashCommand: vi.fn(),
   sendUserMessage: vi.fn(),
   steerTurn: vi.fn(),
   startReview: vi.fn(),
   startThread: vi.fn(),
   listThreads: vi.fn(),
+  listSlashCommands: vi.fn().mockResolvedValue({ result: { data: [] } }),
+  listMcpServerStatus: vi.fn().mockResolvedValue({ result: { data: [] } }),
+  getAppsList: vi.fn().mockResolvedValue({ result: { data: [], nextCursor: null } }),
   resumeThread: vi.fn(),
   archiveThread: vi.fn(),
   setThreadName: vi.fn(),
@@ -994,6 +999,50 @@ describe("useThreads UX integration", () => {
 
     expect(result.current.threadParentById["thread-parent"]).toBeUndefined();
     expect(localStorage.getItem(STORAGE_KEY_DETACHED_REVIEW_LINKS)).toBeNull();
+  });
+
+  it("keeps conversation items ordered when an older item arrives late", () => {
+    vi.mocked(resumeThread).mockResolvedValue({
+      result: {
+        thread: {
+          id: "thread-1",
+          preview: "",
+          turns: [],
+        },
+      },
+    });
+
+    const { result } = renderHook(() =>
+      useThreads({
+        activeWorkspace: workspace,
+        onWorkspaceConnected: vi.fn(),
+      }),
+    );
+
+    act(() => {
+      handlers?.onItemCompleted?.("ws-1", "thread-1", {
+        type: "userMessage",
+        id: "item_1",
+        content: [{ type: "text", text: "First message" }],
+      });
+      handlers?.onItemCompleted?.("ws-1", "thread-1", {
+        type: "userMessage",
+        id: "item_3",
+        content: [{ type: "text", text: "Third message (arrived first)" }],
+      });
+      handlers?.onItemCompleted?.("ws-1", "thread-1", {
+        type: "commandExecution",
+        id: "item_2",
+        command: ["ls", "src"],
+        status: "completed",
+        aggregatedOutput: "",
+      });
+      result.current.setActiveThreadId("thread-1");
+    });
+
+    const items = result.current.activeItems;
+    expect(items.map((item) => item.id)).toEqual(["item_1", "item_2", "item_3"]);
+    expect(items.map((item) => item.kind)).toEqual(["message", "explore", "message"]);
   });
 
   it("orders thread lists, applies custom names, and keeps pin ordering stable", async () => {

@@ -252,6 +252,8 @@ impl SessionTranslationState {
             turn_state.reasoning_item_id = None;
             turn_state.reasoning_part_id = None;
             turn_state.reasoning_text_len = 0;
+            turn_state.user_message_item_id = None;
+            turn_state.user_message_text.clear();
         }
     }
 
@@ -2907,6 +2909,18 @@ mod tests {
         state.prepare_replay("ses_sub".into());
         let replay_id = state.user_message_item("ses_sub");
         assert_eq!(replay_id, live_id, "replay must reuse the live SSE item ID");
+    }
+
+    #[test]
+    fn replay_user_message_boundary_allocates_new_user_item_id() {
+        let mut state = SessionTranslationState::new(String::new());
+        state.prepare_replay("ses_sub".into());
+
+        let first = state.user_message_item("ses_sub");
+        state.mark_new_replayed_user_message_boundary();
+        let second = state.user_message_item("ses_sub");
+
+        assert_ne!(first, second, "each replayed user message should get its own item ID");
     }
 
     #[test]

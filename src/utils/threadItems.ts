@@ -436,9 +436,48 @@ function summarizeExploration(items: ConversationItem[]) {
   return result;
 }
 
+type SyntheticItemOrderKey = {
+  family: "item" | "replay_item";
+  seq: number;
+};
+
+function getSyntheticItemOrderKey(id: string): SyntheticItemOrderKey | null {
+  const match = /^(replay_item|item)_(\d+)$/.exec(id.trim());
+  if (!match) {
+    return null;
+  }
+  const seq = Number(match[2]);
+  if (!Number.isSafeInteger(seq) || seq < 0) {
+    return null;
+  }
+  return {
+    family: match[1] as SyntheticItemOrderKey["family"],
+    seq,
+  };
+}
+
+function sortItemsBySyntheticOrder(items: ConversationItem[]) {
+  if (items.length < 2) {
+    return items;
+  }
+  const withIndex = items.map((item, index) => ({
+    item,
+    index,
+    key: getSyntheticItemOrderKey(item.id),
+  }));
+  withIndex.sort((a, b) => {
+    if (a.key && b.key && a.key.family === b.key.family && a.key.seq !== b.key.seq) {
+      return a.key.seq - b.key.seq;
+    }
+    return a.index - b.index;
+  });
+  return withIndex.map((entry) => entry.item);
+}
+
 export function prepareThreadItems(items: ConversationItem[]) {
+  const ordered = sortItemsBySyntheticOrder(items);
   const filtered: ConversationItem[] = [];
-  for (const item of items) {
+  for (const item of ordered) {
     const last = filtered[filtered.length - 1];
     if (
       item.kind === "message" &&

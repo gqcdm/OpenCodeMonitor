@@ -86,6 +86,65 @@ describe("threadItems", () => {
     expect(prepared[0].kind).toBe("review");
   });
 
+  it("reorders late-arriving synthesized items back into sequence order", () => {
+    const items: ConversationItem[] = [
+      {
+        id: "item_1",
+        kind: "message",
+        role: "user",
+        text: "First",
+      },
+      {
+        id: "item_3",
+        kind: "message",
+        role: "user",
+        text: "Third (arrived earlier)",
+      },
+      {
+        id: "item_2",
+        kind: "tool",
+        toolType: "commandExecution",
+        title: "Command: ls",
+        detail: "",
+        status: "completed",
+        output: "",
+      },
+    ];
+
+    const prepared = prepareThreadItems(items);
+    expect(prepared.map((item) => item.id)).toEqual(["item_1", "item_2", "item_3"]);
+  });
+
+  it("preserves order across mixed item id families", () => {
+    const items: ConversationItem[] = [
+      {
+        id: "replay_item_2",
+        kind: "message",
+        role: "assistant",
+        text: "Older replay",
+      },
+      {
+        id: "item_1",
+        kind: "message",
+        role: "assistant",
+        text: "Live item",
+      },
+      {
+        id: "replay_item_1",
+        kind: "message",
+        role: "assistant",
+        text: "Earlier replay emitted late",
+      },
+    ];
+
+    const prepared = prepareThreadItems(items);
+    expect(prepared.map((item) => item.id)).toEqual([
+      "replay_item_2",
+      "item_1",
+      "replay_item_1",
+    ]);
+  });
+
   it("summarizes explored reads and hides raw commands", () => {
     const items: ConversationItem[] = [
       {
