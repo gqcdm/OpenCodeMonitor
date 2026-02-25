@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  AgentMention,
   AppMention,
   OpenCodeSlashCommand,
   QueuedMessage,
@@ -23,6 +24,7 @@ type UseQueuedSendOptions = {
     text: string,
     images?: string[],
     appMentions?: AppMention[],
+    agentMentions?: AgentMention[],
   ) => Promise<void>;
   sendUserMessageToThread: (
     workspace: WorkspaceInfo,
@@ -49,11 +51,13 @@ type UseQueuedSendResult = {
     text: string,
     images?: string[],
     appMentions?: AppMention[],
+    agentMentions?: AgentMention[],
   ) => Promise<void>;
   queueMessage: (
     text: string,
     images?: string[],
     appMentions?: AppMention[],
+    agentMentions?: AgentMention[],
   ) => Promise<void>;
   removeQueuedMessage: (threadId: string, messageId: string) => void;
 };
@@ -265,11 +269,13 @@ export function useQueuedSend({
       text: string,
       images: string[] = [],
       appMentions: AppMention[] = [],
+      agentMentions: AgentMention[] = [],
     ) => {
       const trimmed = text.trim();
       const command = parseSlashCommand(trimmed, appsEnabled, slashCommands);
       const nextImages = command ? [] : images;
-      const nextMentions = command ? [] : appMentions;
+      const nextAppMentions = command ? [] : appMentions;
+      const nextAgentMentions = command ? [] : agentMentions;
       if (!trimmed && nextImages.length === 0) {
         return;
       }
@@ -282,7 +288,8 @@ export function useQueuedSend({
           text: trimmed,
           createdAt: Date.now(),
           images: nextImages,
-          ...(nextMentions.length > 0 ? { appMentions: nextMentions } : {}),
+          ...(nextAppMentions.length > 0 ? { appMentions: nextAppMentions } : {}),
+          ...(nextAgentMentions.length > 0 ? { agentMentions: nextAgentMentions } : {}),
         };
         enqueueMessage(activeThreadId, item);
         clearActiveImages();
@@ -296,11 +303,14 @@ export function useQueuedSend({
         clearActiveImages();
         return;
       }
-      if (nextMentions.length > 0) {
-        await sendUserMessage(trimmed, nextImages, nextMentions);
-      } else {
-        await sendUserMessage(trimmed, nextImages);
-      }
+      const hasAppMentions = nextAppMentions.length > 0;
+      const hasAgentMentions = nextAgentMentions.length > 0;
+      await sendUserMessage(
+        trimmed,
+        nextImages,
+        hasAppMentions ? nextAppMentions : undefined,
+        hasAgentMentions ? nextAgentMentions : undefined,
+      );
       clearActiveImages();
     },
     [
@@ -325,11 +335,13 @@ export function useQueuedSend({
       text: string,
       images: string[] = [],
       appMentions: AppMention[] = [],
+      agentMentions: AgentMention[] = [],
     ) => {
       const trimmed = text.trim();
       const command = parseSlashCommand(trimmed, appsEnabled, slashCommands);
       const nextImages = command ? [] : images;
-      const nextMentions = command ? [] : appMentions;
+      const nextAppMentions = command ? [] : appMentions;
+      const nextAgentMentions = command ? [] : agentMentions;
       if (!trimmed && nextImages.length === 0) {
         return;
       }
@@ -344,7 +356,8 @@ export function useQueuedSend({
         text: trimmed,
         createdAt: Date.now(),
         images: nextImages,
-        ...(nextMentions.length > 0 ? { appMentions: nextMentions } : {}),
+        ...(nextAppMentions.length > 0 ? { appMentions: nextAppMentions } : {}),
+        ...(nextAgentMentions.length > 0 ? { agentMentions: nextAgentMentions } : {}),
       };
       enqueueMessage(activeThreadId, item);
       clearActiveImages();
@@ -414,12 +427,14 @@ export function useQueuedSend({
         if (command) {
           await runSlashCommand(command, trimmed);
         } else {
-          const queuedMentions = nextItem.appMentions ?? [];
-          if (queuedMentions.length > 0) {
-            await sendUserMessage(nextItem.text, nextItem.images ?? [], queuedMentions);
-          } else {
-            await sendUserMessage(nextItem.text, nextItem.images ?? []);
-          }
+          const queuedAppMentions = nextItem.appMentions ?? [];
+          const queuedAgentMentions = nextItem.agentMentions ?? [];
+          await sendUserMessage(
+            nextItem.text,
+            nextItem.images ?? [],
+            queuedAppMentions.length > 0 ? queuedAppMentions : undefined,
+            queuedAgentMentions.length > 0 ? queuedAgentMentions : undefined,
+          );
         }
       } catch {
         setInFlightByThread((prev) => ({ ...prev, [threadId]: null }));

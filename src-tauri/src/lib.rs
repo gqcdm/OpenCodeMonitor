@@ -247,6 +247,7 @@ pub fn run() {
             codex::execute_slash_command,
             codex::set_thread_name,
             codex::collaboration_mode_list,
+            codex::agent_list,
             workspaces::connect_workspace,
             git::get_git_status,
             git::list_git_roots,

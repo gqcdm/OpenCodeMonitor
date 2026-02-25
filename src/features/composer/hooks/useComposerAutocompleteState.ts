@@ -14,6 +14,7 @@ import {
 import { isComposingEvent } from "../../../utils/keys";
 
 type Skill = { name: string; description?: string };
+type Agent = { name: string; mode: string; description?: string };
 type UseComposerAutocompleteStateArgs = {
   text: string;
   selectionStart: number | null;
@@ -21,6 +22,7 @@ type UseComposerAutocompleteStateArgs = {
   appsEnabled: boolean;
   slashCommands?: OpenCodeSlashCommand[];
   skills: Skill[];
+  agents: Agent[];
   apps: AppOption[];
   prompts: CustomPromptOption[];
   files: string[];
@@ -144,6 +146,7 @@ export function useComposerAutocompleteState({
   appsEnabled,
   slashCommands = [],
   skills,
+  agents,
   apps,
   prompts: _prompts,
   files,
@@ -173,6 +176,23 @@ export function useComposerAutocompleteState({
         })),
     ],
     [apps, skills],
+  );
+
+  const agentItems = useMemo<AutocompleteItem[]>(
+    () =>
+      agents.map((agent) => {
+        const displayName =
+          agent.name.charAt(0).toUpperCase() + agent.name.slice(1);
+        return {
+          id: `agent:${agent.name}`,
+          label: `${displayName} Agent`,
+          description: agent.description,
+          insertText: `@${agent.name}`,
+          group: "Agents" as const,
+          agentName: agent.name,
+        };
+      }),
+    [agents],
   );
 
   const fileTriggerActive = useMemo(
@@ -239,13 +259,18 @@ export function useComposerAutocompleteState({
     [slashCommandItems],
   );
 
+  const atTriggerItems = useMemo<AutocompleteItem[]>(
+    () => [...agentItems, ...fileItems],
+    [agentItems, fileItems],
+  );
+
   const triggers = useMemo(
     () => [
       { trigger: "/", items: slashItems },
       { trigger: "$", items: skillItems },
-      { trigger: "@", items: fileItems },
+      { trigger: "@", items: atTriggerItems },
     ],
-    [fileItems, skillItems, slashItems],
+    [atTriggerItems, skillItems, slashItems],
   );
 
   const {
@@ -275,13 +300,14 @@ export function useComposerAutocompleteState({
       const cursor = selectionStart ?? autocompleteRange.end;
       const promptRange =
         triggerChar === "@" ? findPromptArgRangeAtCursor(text, cursor) : null;
+      const isAgentItem = item.id.startsWith("agent:");
       const before =
         triggerChar === "@"
           ? text.slice(0, triggerIndex)
           : text.slice(0, autocompleteRange.start);
       const after = text.slice(autocompleteRange.end);
       const insert = item.insertText ?? item.label;
-      const actualInsert = triggerChar === "@"
+      const actualInsert = triggerChar === "@" && !isAgentItem
         ? insert.replace(/^@+/, "")
         : insert;
       const needsSpace = promptRange

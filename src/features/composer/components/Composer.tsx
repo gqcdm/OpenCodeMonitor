@@ -9,6 +9,7 @@ import {
   type ClipboardEvent,
 } from "react";
 import type {
+  AgentMention,
   AppMention,
   AppOption,
   ComposerEditorSettings,
@@ -30,6 +31,10 @@ import {
   type AppMentionBinding,
 } from "../../apps/utils/appMentions";
 import {
+  resolveBoundAgentMentions,
+  type AgentMentionBinding,
+} from "../../agents/utils/agentMentions";
+import {
   getFenceTriggerLine,
   getLineIndent,
   getListContinuation,
@@ -46,8 +51,8 @@ import { ComposerQueue } from "./ComposerQueue";
 import { isMobilePlatform } from "../../../utils/platformPaths";
 
 type ComposerProps = {
-  onSend: (text: string, images: string[], appMentions?: AppMention[]) => void;
-  onQueue: (text: string, images: string[], appMentions?: AppMention[]) => void;
+  onSend: (text: string, images: string[], appMentions?: AppMention[], agentMentions?: AgentMention[]) => void;
+  onQueue: (text: string, images: string[], appMentions?: AppMention[], agentMentions?: AgentMention[]) => void;
   onStop: () => void;
   canStop: boolean;
   disabled?: boolean;
@@ -69,6 +74,7 @@ type ComposerProps = {
   accessMode: "read-only" | "current" | "full-access";
   onSelectAccessMode: (mode: "read-only" | "current" | "full-access") => void;
   skills: { name: string; description?: string }[];
+  agents: { name: string; mode: string; description?: string }[];
   apps: AppOption[];
   prompts: CustomPromptOption[];
   files: string[];
@@ -172,6 +178,7 @@ export const Composer = memo(function Composer({
   onSelectEffort,
   reasoningSupported,
   skills,
+  agents,
   apps,
   prompts,
   files,
@@ -231,6 +238,7 @@ export const Composer = memo(function Composer({
   const [text, setText] = useState(draftText);
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [appMentionBindings, setAppMentionBindings] = useState<AppMentionBinding[]>([]);
+  const [agentMentionBindings, setAgentMentionBindings] = useState<AgentMentionBinding[]>([]);
   const [suggestionsStyle, setSuggestionsStyle] = useState<
     CSSProperties | undefined
   >(undefined);
@@ -288,6 +296,7 @@ export const Composer = memo(function Composer({
     appsEnabled,
     slashCommands,
     skills,
+    agents,
     apps,
     prompts,
     files,
@@ -295,30 +304,47 @@ export const Composer = memo(function Composer({
     setText: setComposerText,
     setSelectionStart,
     onItemApplied: (item, context) => {
-      if (context.triggerChar !== "$" || item.group !== "Apps" || !item.mentionPath) {
+      if (context.triggerChar === "$" && item.group === "Apps" && item.mentionPath) {
+        const slug = context.insertedText.trim().toLowerCase();
+        if (!slug) {
+          return;
+        }
+        const nextBinding: AppMentionBinding = {
+          slug,
+          mention: {
+            name: item.label,
+            path: item.mentionPath,
+          },
+        };
+        setAppMentionBindings((prev) => {
+          const filtered = prev.filter(
+            (binding) =>
+              !(
+                binding.slug === nextBinding.slug &&
+                binding.mention.path === nextBinding.mention.path
+              ),
+          );
+          return [...filtered, nextBinding];
+        });
         return;
       }
-      const slug = context.insertedText.trim().toLowerCase();
-      if (!slug) {
-        return;
+      if (context.triggerChar === "@" && item.group === "Agents" && item.agentName) {
+        const slug = context.insertedText.trim().toLowerCase();
+        if (!slug) {
+          return;
+        }
+        const nextBinding: AgentMentionBinding = {
+          slug,
+          agentName: item.agentName,
+        };
+        setAgentMentionBindings((prev) => {
+          const filtered = prev.filter(
+            (binding) =>
+              !(binding.slug === nextBinding.slug && binding.agentName === nextBinding.agentName),
+          );
+          return [...filtered, nextBinding];
+        });
       }
-      const nextBinding: AppMentionBinding = {
-        slug,
-        mention: {
-          name: item.label,
-          path: item.mentionPath,
-        },
-      };
-      setAppMentionBindings((prev) => {
-        const filtered = prev.filter(
-          (binding) =>
-            !(
-              binding.slug === nextBinding.slug &&
-              binding.mention.path === nextBinding.mention.path
-            ),
-        );
-        return [...filtered, nextBinding];
-      });
     },
   });
   useEffect(() => {
@@ -394,16 +420,17 @@ export const Composer = memo(function Composer({
     if (trimmed) {
       recordHistory(trimmed);
     }
-    const resolvedMentions = resolveBoundAppMentions(trimmed, appMentionBindings);
-    if (resolvedMentions.length > 0) {
-      onSend(trimmed, attachedImages, resolvedMentions);
-    } else {
-      onSend(trimmed, attachedImages);
-    }
+    const resolvedAppMentions = resolveBoundAppMentions(trimmed, appMentionBindings);
+    const resolvedAgentMentions = resolveBoundAgentMentions(trimmed, agentMentionBindings);
+    const appMentions = resolvedAppMentions.length > 0 ? resolvedAppMentions : undefined;
+    const agentMentions = resolvedAgentMentions.length > 0 ? resolvedAgentMentions : undefined;
+    onSend(trimmed, attachedImages, appMentions, agentMentions);
     resetHistoryNavigation();
     setComposerText("");
     setAppMentionBindings([]);
+    setAgentMentionBindings([]);
   }, [
+    agentMentionBindings,
     appMentionBindings,
     attachedImages,
     disabled,
@@ -425,16 +452,17 @@ export const Composer = memo(function Composer({
     if (trimmed) {
       recordHistory(trimmed);
     }
-    const resolvedMentions = resolveBoundAppMentions(trimmed, appMentionBindings);
-    if (resolvedMentions.length > 0) {
-      onQueue(trimmed, attachedImages, resolvedMentions);
-    } else {
-      onQueue(trimmed, attachedImages);
-    }
+    const resolvedAppMentions = resolveBoundAppMentions(trimmed, appMentionBindings);
+    const resolvedAgentMentions = resolveBoundAgentMentions(trimmed, agentMentionBindings);
+    const appMentions = resolvedAppMentions.length > 0 ? resolvedAppMentions : undefined;
+    const agentMentions = resolvedAgentMentions.length > 0 ? resolvedAgentMentions : undefined;
+    onQueue(trimmed, attachedImages, appMentions, agentMentions);
     resetHistoryNavigation();
     setComposerText("");
     setAppMentionBindings([]);
+    setAgentMentionBindings([]);
   }, [
+    agentMentionBindings,
     appMentionBindings,
     attachedImages,
     disabled,
@@ -447,6 +475,7 @@ export const Composer = memo(function Composer({
 
   useEffect(() => {
     setAppMentionBindings([]);
+    setAgentMentionBindings([]);
   }, [historyKey]);
 
   useEffect(() => {

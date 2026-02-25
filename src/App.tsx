@@ -55,6 +55,7 @@ import { useModels } from "@/features/models/hooks/useModels";
 import { useCollaborationModes } from "@/features/collaboration/hooks/useCollaborationModes";
 import { useCollaborationModeSelection } from "@/features/collaboration/hooks/useCollaborationModeSelection";
 import { useSkills } from "@/features/skills/hooks/useSkills";
+import { useAgents } from "@/features/agents/hooks/useAgents";
 import { useApps } from "@/features/apps/hooks/useApps";
 import { useCustomPrompts } from "@/features/prompts/hooks/useCustomPrompts";
 import { useWorkspaceFileListing } from "@app/hooks/useWorkspaceFileListing";
@@ -478,6 +479,7 @@ function MainApp() {
     onFocusComposer: () => composerInputRef.current?.focus(),
   });
   const { skills } = useSkills({ activeWorkspace, onDebug: addDebugEntry });
+  const { agents } = useAgents({ activeWorkspace, onDebug: addDebugEntry });
   const {
     prompts,
     createPrompt,
@@ -2092,6 +2094,7 @@ function MainApp() {
     accessMode,
     onSelectAccessMode: handleSelectAccessMode,
     skills,
+    agents,
     appsEnabled: appsFeatureEnabled,
     slashCommands,
     apps,

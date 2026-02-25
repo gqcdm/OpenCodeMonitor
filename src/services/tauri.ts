@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Options as NotificationOptions } from "@tauri-apps/plugin-notification";
 import type {
+  AgentMention,
   AppSettings,
   CodexUpdateResult,
   CodexDoctorResult,
@@ -294,6 +295,7 @@ export async function sendUserMessage(
     images?: string[];
     collaborationMode?: Record<string, unknown> | null;
     appMentions?: AppMention[];
+    agentMentions?: AgentMention[];
   },
 ) {
   const payload: Record<string, unknown> = {
@@ -310,6 +312,9 @@ export async function sendUserMessage(
   }
   if (options?.appMentions && options.appMentions.length > 0) {
     payload.appMentions = options.appMentions;
+  }
+  if (options?.agentMentions && options.agentMentions.length > 0) {
+    payload.agentMentions = options.agentMentions;
   }
   return invoke("send_user_message", payload);
 }
@@ -577,6 +582,10 @@ export async function generateRunMetadata(workspaceId: string, prompt: string) {
 
 export async function getCollaborationModes(workspaceId: string) {
   return invoke<any>("collaboration_mode_list", { workspaceId });
+}
+
+export async function getAgentList(workspaceId: string) {
+  return invoke<any>("agent_list", { workspaceId });
 }
 
 export async function getAccountRateLimits(workspaceId: string) {

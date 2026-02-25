@@ -160,6 +160,8 @@ pub(super) async fn try_handle(
             let images = parse_optional_string_array(params, "images");
             let app_mentions = parse_optional_value(params, "appMentions")
                 .and_then(|value| value.as_array().cloned());
+            let agent_mentions = parse_optional_value(params, "agentMentions")
+                .and_then(|value| value.as_array().cloned());
             let collaboration_mode = parse_optional_value(params, "collaborationMode");
             Some(
                 state
@@ -172,6 +174,7 @@ pub(super) async fn try_handle(
                         access_mode,
                         images,
                         app_mentions,
+                        agent_mentions,
                         collaboration_mode,
                     )
                     .await,

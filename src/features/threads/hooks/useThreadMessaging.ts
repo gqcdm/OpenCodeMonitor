@@ -3,6 +3,7 @@ import type { Dispatch, MutableRefObject } from "react";
 import * as Sentry from "@sentry/react";
 import type {
   AccessMode,
+  AgentMention,
   AppMention,
   RateLimitSnapshot,
   CustomPromptOption,
@@ -102,6 +103,7 @@ type SendMessageOptions = {
   collaborationMode?: Record<string, unknown> | null;
   accessMode?: AccessMode;
   appMentions?: AppMention[];
+  agentMentions?: AgentMention[];
 };
 
 type UseThreadMessagingOptions = {
@@ -260,6 +262,7 @@ export function useThreadMessaging({
       const resolvedAccessMode =
         options?.accessMode !== undefined ? options.accessMode : accessMode;
       const appMentions = options?.appMentions ?? [];
+      const agentMentions = options?.agentMentions ?? [];
 
       const isProcessing = threadStatusById[threadId]?.isProcessing ?? false;
       const activeTurnId = activeTurnIdByThread[threadId] ?? null;
@@ -333,6 +336,7 @@ export function useThreadMessaging({
             accessMode?: AccessMode;
             images?: string[];
             appMentions?: AppMention[];
+            agentMentions?: AgentMention[];
           } = {
             model: resolvedModel,
             effort: resolvedEffort,
@@ -342,6 +346,9 @@ export function useThreadMessaging({
           };
           if (appMentions.length > 0) {
             payload.appMentions = appMentions;
+          }
+          if (agentMentions.length > 0) {
+            payload.agentMentions = agentMentions;
           }
           return sendUserMessageService(
             workspace.id,
@@ -484,7 +491,8 @@ export function useThreadMessaging({
     async (
       text: string,
       images: string[] = [],
-      appMentions: AppMention[] = [],
+      appMentions?: AppMention[],
+      agentMentions?: AgentMention[],
     ) => {
       if (!activeWorkspace) {
         return;
@@ -517,6 +525,7 @@ export function useThreadMessaging({
       await sendMessageToThread(activeWorkspace, threadId, finalText, images, {
         skipPromptExpansion: true,
         appMentions,
+        agentMentions,
       });
     },
     [

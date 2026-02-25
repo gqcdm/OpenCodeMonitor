@@ -585,11 +585,23 @@ export type QueuedMessage = {
   createdAt: number;
   images?: string[];
   appMentions?: AppMention[];
+  agentMentions?: AgentMention[];
 };
 
 export type AppMention = {
   name: string;
   path: string;
+};
+
+export type AgentMention = {
+  name: string;
+  source?: { value: string; start: number; end: number };
+};
+
+export type AgentOption = {
+  name: string;
+  mode: string;
+  description?: string;
 };
 
 export type ModelOption = {

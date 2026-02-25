@@ -22,6 +22,7 @@ import ScrollText from "lucide-react/dist/esm/icons/scroll-text";
 import Wrench from "lucide-react/dist/esm/icons/wrench";
 import FileText from "lucide-react/dist/esm/icons/file-text";
 import Plug from "lucide-react/dist/esm/icons/plug";
+import Users from "lucide-react/dist/esm/icons/users";
 import { useComposerImageDrop } from "../hooks/useComposerImageDrop";
 import {
   PopoverMenuItem,
@@ -95,6 +96,9 @@ const isFileSuggestion = (item: AutocompleteItem) => item.group === "Files";
 const suggestionIcon = (item: AutocompleteItem) => {
   if (isFileSuggestion(item)) {
     return FileText;
+  }
+  if (item.id.startsWith("agent:")) {
+    return Users;
   }
   if (item.id.startsWith("skill:")) {
     return Wrench;
@@ -621,14 +625,18 @@ export function ComposerInput({
                         const Icon = suggestionIcon(item);
                         const fileSuggestion = isFileSuggestion(item);
                         const skillSuggestion = item.id.startsWith("skill:");
+                        const agentSuggestion = item.id.startsWith("agent:");
                         const title = fileSuggestion ? fileTitle(item.label) : item.label;
                         const description = fileSuggestion ? item.label : item.description;
                         const fileTypeIconUrl = fileSuggestion
                           ? getFileTypeIconUrl(item.label)
                           : null;
+                        const descriptionClass = skillSuggestion || agentSuggestion
+                          ? " composer-suggestion-description--truncate"
+                          : "";
                         return (
                           <span className="composer-suggestion-row">
-                            <span className="composer-suggestion-icon" aria-hidden>
+                            <span className={`composer-suggestion-icon${agentSuggestion ? " composer-suggestion-icon--agent" : ""}`} aria-hidden>
                               {fileTypeIconUrl ? (
                                 <img
                                   className="composer-suggestion-icon-image"
@@ -645,9 +653,7 @@ export function ComposerInput({
                               <span className="composer-suggestion-title">{title}</span>
                               {description && (
                                 <span
-                                  className={`composer-suggestion-description${
-                                    skillSuggestion ? " composer-suggestion-description--skill" : ""
-                                  }`}
+                                  className={`composer-suggestion-description${descriptionClass}`}
                                 >
                                   {description}
                                 </span>

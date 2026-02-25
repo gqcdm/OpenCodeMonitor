@@ -196,6 +196,7 @@ export function WorkspaceHome({
     apps,
     prompts,
     files,
+    agents: [],
     textareaRef,
     setText: onPromptChange,
     setSelectionStart,

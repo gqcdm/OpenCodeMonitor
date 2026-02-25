@@ -602,6 +602,18 @@
   overflow: hidden;
 }
 
+.composer-suggestion-description--truncate {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.composer-suggestion-icon--agent {
+  color: var(--accent-teal, #2dd4bf);
+}
+
 .composer-bar {
   display: flex;
   align-items: center;

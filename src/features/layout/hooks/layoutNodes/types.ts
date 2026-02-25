@@ -3,6 +3,8 @@ import type { ReviewPromptState, ReviewPromptStep } from "../../../threads/hooks
 import type { WorkspaceLaunchScriptsState } from "../../../app/hooks/useWorkspaceLaunchScripts";
 import type {
   AccessMode,
+  AgentMention,
+  AgentOption,
   ApprovalRequest,
   BranchInfo,
   CollaborationModeOption,
@@ -368,11 +370,13 @@ export type LayoutNodesOptions = {
     text: string,
     images: string[],
     appMentions?: AppMention[],
+    agentMentions?: AgentMention[],
   ) => void | Promise<void>;
   onQueue: (
     text: string,
     images: string[],
     appMentions?: AppMention[],
+    agentMentions?: AgentMention[],
   ) => void | Promise<void>;
   onStop: () => void;
   canStop: boolean;
@@ -431,6 +435,7 @@ export type LayoutNodesOptions = {
   accessMode: AccessMode;
   onSelectAccessMode: (mode: AccessMode) => void;
   skills: SkillOption[];
+  agents: AgentOption[];
   appsEnabled: boolean;
   slashCommands?: OpenCodeSlashCommand[];
   apps: AppOption[];

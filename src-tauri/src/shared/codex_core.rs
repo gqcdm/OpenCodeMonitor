@@ -303,6 +303,52 @@ fn collaboration_mode_entry_from_agent(agent: &Value) -> Option<Value> {
     }))
 }
 
+/// Converts an agent from the REST API into a format suitable for @ mentions.
+/// Filters for subagents (mode != "primary") that can be mentioned inline.
+fn agent_mention_entry_from_agent(agent: &Value) -> Option<Value> {
+    let name = agent
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    let agent_mode = agent
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("subagent");
+
+    // For @ mentions, filter out primary-only agents (like TUI does).
+    // Include "subagent" and "all" modes.
+    if agent_mode == "primary" {
+        return None;
+    }
+
+    let hidden = agent
+        .get("hidden")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if hidden {
+        return None;
+    }
+
+    let description = agent
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    Some(json!({
+        "name": name,
+        "mode": agent_mode,
+        "description": description,
+    }))
+}
+
 fn resume_thread_result_thread(thread_id: &str, session_details: Option<&Value>) -> Value {
     if let Some(details) = session_details.and_then(session_to_thread_entry) {
         return details;
@@ -926,6 +972,7 @@ async fn build_rest_prompt_parts(
     text: String,
     images: Option<Vec<String>>,
     app_mentions: Option<Vec<Value>>,
+    agent_mentions: Option<Vec<Value>>,
 ) -> Result<Vec<Value>, String> {
     let trimmed_text = text.trim();
     let mut parts: Vec<Value> = Vec::new();
@@ -1019,6 +1066,23 @@ async fn build_rest_prompt_parts(
                     }));
                 }
             }
+        }
+    }
+    if let Some(mentions) = agent_mentions {
+        for mention in mentions {
+            let object = mention
+                .as_object()
+                .ok_or_else(|| "invalid agent mention payload".to_string())?;
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "invalid agent mention name".to_string())?;
+            parts.push(json!({
+                "type": "agent",
+                "name": name
+            }));
         }
     }
     if parts.is_empty() {
@@ -1390,13 +1454,14 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
     _access_mode: Option<String>,
     images: Option<Vec<String>>,
     app_mentions: Option<Vec<Value>>,
+    agent_mentions: Option<Vec<Value>>,
     collaboration_mode: Option<Value>,
     event_sink: &E,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
     let user_text = text.trim().to_string();
     let user_images = images.clone().unwrap_or_default();
-    let parts = build_rest_prompt_parts(text, images, app_mentions).await?;
+    let parts = build_rest_prompt_parts(text, images, app_mentions, agent_mentions).await?;
     let _prompt_guard = session.prompt_lock.lock().await;
 
     // Synthesize turn ID and prepare translation state for this session.
@@ -1535,6 +1600,27 @@ pub(crate) async fn collaboration_mode_list_core(
     let data: Vec<Value> = agent_list
         .iter()
         .filter_map(collaboration_mode_entry_from_agent)
+        .collect();
+
+    Ok(json!({ "result": { "data": data } }))
+}
+
+pub(crate) async fn agent_list_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+
+    let agents = match session.rest_get("/agent").await {
+        Ok(response) => response,
+        Err(_) => return Ok(json!({ "result": { "data": [] } })),
+    };
+
+    let agent_list = agents.as_array().cloned().unwrap_or_default();
+
+    let data: Vec<Value> = agent_list
+        .iter()
+        .filter_map(agent_mention_entry_from_agent)
         .collect();
 
     Ok(json!({ "result": { "data": data } }))

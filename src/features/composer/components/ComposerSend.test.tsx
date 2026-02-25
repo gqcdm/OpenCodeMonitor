@@ -58,6 +58,7 @@ function ComposerHarness({ onSend, apps = [] }: HarnessProps) {
       apps={apps}
       prompts={[]}
       files={[]}
+      agents={[]}
       draftText={draftText}
       onDraftChange={setDraftText}
       textareaRef={textareaRef}
@@ -82,7 +83,7 @@ describe("Composer send triggers", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(onSend).toHaveBeenCalledWith("hello world", []);
+    expect(onSend).toHaveBeenCalledWith("hello world", [], undefined, undefined);
   });
 
   it("sends once on send-button click", () => {
@@ -94,7 +95,7 @@ describe("Composer send triggers", () => {
     fireEvent.click(screen.getByLabelText("Send"));
 
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(onSend).toHaveBeenCalledWith("from button", []);
+    expect(onSend).toHaveBeenCalledWith("from button", [], undefined, undefined);
   });
 
   it("blurs the textarea after Enter send on mobile", () => {
@@ -108,7 +109,7 @@ describe("Composer send triggers", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(onSend).toHaveBeenCalledWith("dismiss keyboard", []);
+    expect(onSend).toHaveBeenCalledWith("dismiss keyboard", [], undefined, undefined);
     expect(blurSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -138,6 +139,7 @@ describe("Composer send triggers", () => {
       "$calendar-app",
       [],
       [{ name: "Calendar App", path: "app://connector_calendar" }],
+      undefined,
     );
   });
 });

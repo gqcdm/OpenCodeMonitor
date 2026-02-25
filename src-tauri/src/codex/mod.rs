@@ -303,6 +303,7 @@ pub(crate) async fn send_user_message(
     access_mode: Option<String>,
     images: Option<Vec<String>>,
     app_mentions: Option<Vec<Value>>,
+    agent_mentions: Option<Vec<Value>>,
     collaboration_mode: Option<Value>,
     state: State<'_, AppState>,
     app: AppHandle,
@@ -323,6 +324,7 @@ pub(crate) async fn send_user_message(
         payload.insert("accessMode".to_string(), json!(access_mode));
         payload.insert("images".to_string(), json!(images));
         payload.insert("appMentions".to_string(), json!(app_mentions));
+        payload.insert("agentMentions".to_string(), json!(agent_mentions));
         if let Some(mode) = collaboration_mode {
             if !mode.is_null() {
                 payload.insert("collaborationMode".to_string(), mode);
@@ -348,6 +350,7 @@ pub(crate) async fn send_user_message(
         access_mode,
         images,
         app_mentions,
+        agent_mentions,
         collaboration_mode,
         &event_sink,
     )
@@ -417,6 +420,25 @@ pub(crate) async fn collaboration_mode_list(
     }
 
     codex_core::collaboration_mode_list_core(&state.sessions, workspace_id).await
+}
+
+#[tauri::command]
+pub(crate) async fn agent_list(
+    workspace_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "agent_list",
+            json!({ "workspaceId": workspace_id }),
+        )
+        .await;
+    }
+
+    codex_core::agent_list_core(&state.sessions, workspace_id).await
 }
 
 #[tauri::command]
