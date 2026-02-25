@@ -221,11 +221,11 @@ export function RequestUserInputMessage({
           )}
         </div>
         <div className="request-user-input-actions">
-          <button className="primary" onClick={handleSubmit}>
-            Submit
-          </button>
           <button className="secondary" onClick={handleDismiss}>
             Dismiss
+          </button>
+          <button className="primary" onClick={handleSubmit}>
+            Submit
           </button>
           <div className="request-user-input-shortcuts">
             <span><kbd>Enter</kbd> Submit</span>

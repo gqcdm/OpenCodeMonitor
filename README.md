@@ -30,6 +30,17 @@ cd src-tauri && cargo check
 cd src-tauri && cargo test
 ```
 
+## Credits & Support
+
+OpenCodeMonitor is a fork of [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by [Thomas Ricouard](https://github.com/Dimillian). The majority of this app's functionality comes from his excellent work.
+
+**Support the original author:**
+- [Sponsor Thomas on GitHub](https://github.com/sponsors/Dimillian)
+- [Ice Cubes for Mastodon](https://apps.apple.com/app/ice-cubes-for-mastodon/id6444915884) — his open-source Mastodon client
+
+**Support this fork:**
+- [Buy me a coffee](https://buymeacoffee.com/jacobjmc)
+
 ## License
 
 MIT — see [LICENSE](LICENSE)

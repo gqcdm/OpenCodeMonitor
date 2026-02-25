@@ -70,7 +70,7 @@ export function useThreadApprovals({ dispatch, onDebug }: UseThreadApprovalsOpti
       await respondToServerRequest(
         request.workspace_id,
         request.request_id,
-        "accept",
+        "always",
       );
       dispatch({
         type: "removeApproval",

@@ -1811,12 +1811,11 @@ pub(crate) async fn respond_to_server_request_core(
         session.rest_post_bool(&path, json!({})).await?;
     } else {
         // Permission response: POST /permission/:id/reply
-        let accept = result
+        let decision = result
             .get("decision")
             .and_then(|v| v.as_str())
-            .map(|d| d == "accept")
-            .unwrap_or(true);
-        let body = event_translator::build_permission_response(accept);
+            .unwrap_or("accept");
+        let body = event_translator::build_permission_response(decision);
         let path = format!("/permission/{resource_id}/reply");
         session.rest_post_bool(&path, body).await?;
     }

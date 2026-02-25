@@ -380,7 +380,7 @@ pub(crate) fn translate_sse_event(
         "session.updated" => translate_session_created_or_updated(properties, state, true),
         "session.status" => translate_session_status(properties, state),
         "session.idle" => translate_session_idle(properties, state),
-        "permission.updated" => translate_sse_permission(properties, state),
+        "permission.asked" => translate_sse_permission(properties, state),
         "question.asked" => translate_question_asked(properties, state),
         "question.replied" => translate_question_completed(properties),
         "question.rejected" => translate_question_completed(properties),
@@ -1468,24 +1468,28 @@ fn translate_sse_permission(properties: &Value, state: &mut SessionTranslationSt
         .get("sessionID")
         .and_then(|v| v.as_str())
         .unwrap_or(&state.session_id);
+    // OpenCode sends "permission" field, not "type"
     let perm_type = properties
-        .get("type")
+        .get("permission")
         .and_then(|v| v.as_str())
         .unwrap_or("command");
-    let pattern = properties.get("pattern");
+    // OpenCode sends "patterns" array, not "pattern" string
+    let patterns = properties.get("patterns");
 
     // Encode sessionId:permissionId into the event `id` so the frontend
     // can round-trip it back to `respond_to_server_request`.
     let composite_id = format!("{session_id}:{permission_id}");
 
-    let command_label = if let Some(pat) = pattern {
-        if let Some(arr) = pat.as_array() {
+    // Defensive handling: patterns can be array, string, or missing
+    let command_label = if let Some(pats) = patterns {
+        if let Some(arr) = pats.as_array() {
             arr.iter()
                 .filter_map(|v| v.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         } else {
-            pat.as_str().unwrap_or(perm_type).to_string()
+            // Fallback if patterns is unexpectedly a string
+            pats.as_str().unwrap_or(perm_type).to_string()
         }
     } else {
         perm_type.to_string()
@@ -1495,21 +1499,25 @@ fn translate_sse_permission(properties: &Value, state: &mut SessionTranslationSt
         "id": composite_id,
         "method": "codex/requestApproval",
         "params": {
-            "threadId": session_id,
-            "type": perm_type,
-            "command": [command_label],
-            "rawInput": {}
+            "permission": perm_type,
+            "command": [command_label]
         }
     })]
 }
 
 /// Build the REST body for a permission decision.
 ///
-/// `accept` = true  → `{ response: "allow" }`
-/// `accept` = false → `{ response: "deny" }`
-pub(crate) fn build_permission_response(accept: bool) -> Value {
-    let response = if accept { "allow" } else { "deny" };
-    json!({ "response": response })
+/// Maps frontend decisions to OpenCode reply format:
+/// - `"accept"` → `{ reply: "once" }`
+/// - `"always"` → `{ reply: "always" }`
+/// - `"decline"` (or other) → `{ reply: "reject" }`
+pub(crate) fn build_permission_response(decision: &str) -> Value {
+    let reply = match decision {
+        "accept" => "once",
+        "always" => "always",
+        _ => "reject",
+    };
+    json!({ "reply": reply })
 }
 
 // ---------------------------------------------------------------------------
@@ -2406,22 +2414,23 @@ mod tests {
     }
 
     #[test]
-    fn permission_updated_produces_approval_request() {
+    fn permission_asked_produces_approval_request() {
         let mut state = make_state();
         let event = json!({
-            "type": "permission.updated",
+            "type": "permission.asked",
             "properties": {
                 "id": "perm_42",
-                "type": "bash",
+                "permission": "bash",
                 "sessionID": "ses_test123",
-                "pattern": "rm -rf /tmp/test"
+                "patterns": ["rm -rf /tmp/test"]
             }
         });
         let events = translate_sse_event(&event, &mut state);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "codex/requestApproval");
         assert_eq!(events[0]["id"], "ses_test123:perm_42");
-        assert_eq!(events[0]["params"]["type"], "bash");
+        assert_eq!(events[0]["params"]["permission"], "bash");
+        assert_eq!(events[0]["params"]["command"][0], "rm -rf /tmp/test");
     }
 
     #[test]
@@ -2438,11 +2447,14 @@ mod tests {
 
     #[test]
     fn permission_response_shapes() {
-        let accept = build_permission_response(true);
-        assert_eq!(accept["response"], "allow");
+        let accept = build_permission_response("accept");
+        assert_eq!(accept["reply"], "once");
 
-        let deny = build_permission_response(false);
-        assert_eq!(deny["response"], "deny");
+        let always = build_permission_response("always");
+        assert_eq!(always["reply"], "always");
+
+        let deny = build_permission_response("decline");
+        assert_eq!(deny["reply"], "reject");
     }
 
     #[test]

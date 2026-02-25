@@ -359,7 +359,7 @@ export async function startReview(
 export async function respondToServerRequest(
   workspaceId: string,
   requestId: number | string,
-  decision: "accept" | "decline",
+  decision: "accept" | "decline" | "always",
 ) {
   return invoke("respond_to_server_request", {
     workspaceId,
