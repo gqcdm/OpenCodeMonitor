@@ -2135,6 +2135,7 @@ mod tests {
                 "hello".to_string(),
                 Some(vec!["http://localhost/image.png".to_string()]),
                 None,
+                None,
             )
             .await;
 

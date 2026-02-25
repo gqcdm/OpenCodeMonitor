@@ -119,9 +119,12 @@ impl SessionTranslationState {
     }
 
     /// Start a new turn for a specific session.
+    ///
+    /// INVARIANT: User message ID is always lowest in a turn. If not already set,
+    /// we pre-allocate it here so any subsequent tool IDs are guaranteed higher.
     pub(crate) fn start_turn(&mut self, session_id: String, turn_id: String) {
         self.session_id = session_id.clone();
-        let turn_state = self.session_turns.entry(session_id).or_default();
+        let turn_state = self.session_turns.entry(session_id.clone()).or_default();
         // User prompt parts can arrive before `session.status=active` (common for
         // subagent sessions). Preserve the in-progress user message so later chunks
         // keep merging into the same frontend item instead of creating a duplicate.
@@ -135,8 +138,19 @@ impl SessionTranslationState {
         turn_state.reasoning_item_id = None;
         turn_state.reasoning_part_id = None;
         turn_state.reasoning_text_len = 0;
-        turn_state.user_message_item_id = preserved_user_message_item_id;
-        turn_state.user_message_text = preserved_user_message_text;
+
+        // INVARIANT: Pre-allocate user message ID if not already set.
+        // This ensures user message ID is always lower than any tool IDs in this turn.
+        if let Some(id) = preserved_user_message_item_id {
+            let turn_state = self.session_turns.get_mut(&session_id).unwrap();
+            turn_state.user_message_item_id = Some(id);
+            turn_state.user_message_text = preserved_user_message_text;
+        } else {
+            let pre_allocated_id = self.next_item_id();
+            let turn_state = self.session_turns.get_mut(&session_id).unwrap();
+            turn_state.user_message_item_id = Some(pre_allocated_id);
+            turn_state.user_message_text = String::new();
+        }
     }
 
     /// Prepare translation state for replaying historical messages.
@@ -2939,6 +2953,68 @@ mod tests {
         assert_ne!(
             first, second,
             "each replayed user message should get its own item ID"
+        );
+    }
+
+    #[test]
+    fn user_message_id_always_lower_than_tool_ids_in_turn() {
+        let mut state = SessionTranslationState::new("ses_test".into());
+
+        // Simulate turn starting with session.status=active
+        state.start_turn("ses_test".into(), "turn_1".into());
+
+        // Get user message ID (should be pre-allocated by start_turn)
+        let user_id = state.user_message_item("ses_test");
+
+        // Simulate tool calls getting IDs
+        let tool_id_1 = state.next_item_id();
+        let tool_id_2 = state.next_item_id();
+
+        // Parse sequence numbers
+        let user_seq: u64 = user_id.strip_prefix("item_").unwrap().parse().unwrap();
+        let tool_seq_1: u64 = tool_id_1.strip_prefix("item_").unwrap().parse().unwrap();
+        let tool_seq_2: u64 = tool_id_2.strip_prefix("item_").unwrap().parse().unwrap();
+
+        assert!(
+            user_seq < tool_seq_1,
+            "User message ID ({user_id}) must be lower than first tool ID ({tool_id_1})"
+        );
+        assert!(
+            user_seq < tool_seq_2,
+            "User message ID ({user_id}) must be lower than second tool ID ({tool_id_2})"
+        );
+    }
+
+    #[test]
+    fn start_turn_preserves_existing_user_message_id() {
+        let mut state = SessionTranslationState::new("ses_test".into());
+
+        // Simulate user message arriving BEFORE session.status=active
+        let early_user_id = state.user_message_item("ses_test");
+
+        // Now turn starts - should preserve the existing user message ID
+        state.start_turn("ses_test".into(), "turn_1".into());
+
+        // Get user message ID again - should be the same
+        let after_start_id = state.user_message_item("ses_test");
+
+        assert_eq!(
+            early_user_id, after_start_id,
+            "start_turn must preserve existing user message ID"
+        );
+
+        // Tool IDs should still be higher
+        let tool_id = state.next_item_id();
+        let user_seq: u64 = early_user_id
+            .strip_prefix("item_")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let tool_seq: u64 = tool_id.strip_prefix("item_").unwrap().parse().unwrap();
+
+        assert!(
+            user_seq < tool_seq,
+            "User message ID ({early_user_id}) must be lower than tool ID ({tool_id})"
         );
     }
 

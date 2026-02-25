@@ -145,6 +145,124 @@ describe("threadItems", () => {
     ]);
   });
 
+  it("places user message before agent responses even when user has higher ID", () => {
+    // BUG CASE: backend assigned tool ID before user message ID
+    const items: ConversationItem[] = [
+      {
+        id: "item_1",
+        kind: "tool",
+        toolType: "fileChange",
+        title: "Edit: App.tsx",
+        detail: "",
+        status: "completed",
+      },
+      {
+        id: "item_2",
+        kind: "message",
+        role: "user",
+        text: "Find where skills is passed to Composer",
+      },
+      {
+        id: "item_3",
+        kind: "message",
+        role: "assistant",
+        text: "Let me search for that...",
+      },
+    ];
+
+    const prepared = prepareThreadItems(items);
+
+    // INVARIANT: User message must appear before agent responses
+    expect(prepared[0].kind).toBe("message");
+    expect((prepared[0] as { role: string }).role).toBe("user");
+    expect(prepared.map((item) => item.id)).toEqual(["item_2", "item_1", "item_3"]);
+  });
+
+  it("handles multiple turns with out-of-order IDs", () => {
+    const items: ConversationItem[] = [
+      // Turn 1: tool arrived before user message
+      {
+        id: "item_1",
+        kind: "tool",
+        toolType: "read",
+        title: "Read foo.ts",
+        detail: "",
+        status: "completed",
+      },
+      {
+        id: "item_2",
+        kind: "message",
+        role: "user",
+        text: "First prompt",
+      },
+      {
+        id: "item_3",
+        kind: "message",
+        role: "assistant",
+        text: "First response",
+      },
+      // Turn 2: correct order
+      {
+        id: "item_4",
+        kind: "message",
+        role: "user",
+        text: "Second prompt",
+      },
+      {
+        id: "item_5",
+        kind: "tool",
+        toolType: "write",
+        title: "Write bar.ts",
+        detail: "",
+        status: "completed",
+      },
+    ];
+
+    const prepared = prepareThreadItems(items);
+
+    // Turn 1: user message should be first
+    expect(prepared[0].id).toBe("item_2"); // user
+    expect(prepared[1].id).toBe("item_1"); // tool (moved after user)
+    expect(prepared[2].id).toBe("item_3"); // assistant
+    // Turn 2: already correct
+    expect(prepared[3].id).toBe("item_4"); // user
+    expect(prepared[4].id).toBe("item_5"); // tool
+  });
+
+  it("handles user message with multiple preceding tool items", () => {
+    const items: ConversationItem[] = [
+      {
+        id: "item_1",
+        kind: "tool",
+        toolType: "read",
+        title: "Read file1.ts",
+        detail: "",
+        status: "completed",
+      },
+      {
+        id: "item_2",
+        kind: "tool",
+        toolType: "read",
+        title: "Read file2.ts",
+        detail: "",
+        status: "completed",
+      },
+      {
+        id: "item_3",
+        kind: "message",
+        role: "user",
+        text: "User prompt",
+      },
+    ];
+
+    const prepared = prepareThreadItems(items);
+
+    // User message should be first, followed by both tools
+    expect(prepared[0].id).toBe("item_3"); // user
+    expect(prepared[1].id).toBe("item_1"); // tool
+    expect(prepared[2].id).toBe("item_2"); // tool
+  });
+
   it("summarizes explored reads and hides raw commands", () => {
     const items: ConversationItem[] = [
       {

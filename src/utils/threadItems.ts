@@ -456,22 +456,92 @@ function getSyntheticItemOrderKey(id: string): SyntheticItemOrderKey | null {
   };
 }
 
+type IndexedItem = {
+  item: ConversationItem;
+  index: number;
+  key: SyntheticItemOrderKey | null;
+  isUserMessage: boolean;
+  isAssistantMessage: boolean;
+  isToolItem: boolean;
+};
+
+/**
+ * INVARIANT: User messages appear before agent responses within the same turn.
+ *
+ * This function enforces semantic ordering regardless of ID assignment order.
+ * The backend may assign IDs in processing order (tool gets ID before user message),
+ * but the UI must display user message first.
+ */
 function sortItemsBySyntheticOrder(items: ConversationItem[]) {
   if (items.length < 2) {
     return items;
   }
-  const withIndex = items.map((item, index) => ({
+
+  const indexed: IndexedItem[] = items.map((item, index) => ({
     item,
     index,
     key: getSyntheticItemOrderKey(item.id),
+    isUserMessage: item.kind === "message" && item.role === "user",
+    isAssistantMessage: item.kind === "message" && item.role === "assistant",
+    isToolItem: item.kind === "tool" || item.kind === "explore",
   }));
-  withIndex.sort((a, b) => {
+
+  // First pass: sort by ID sequence within same family
+  indexed.sort((a, b) => {
     if (a.key && b.key && a.key.family === b.key.family && a.key.seq !== b.key.seq) {
       return a.key.seq - b.key.seq;
     }
     return a.index - b.index;
   });
-  return withIndex.map((entry) => entry.item);
+
+  // Second pass: enforce user-message-first invariant
+  // For each user message, move it before any UNOWNED tool items that precede it.
+  // A tool is "unowned" if there's no user message between it and the current user.
+  // Stop at any message (user or assistant) - they mark turn boundaries.
+  const result: IndexedItem[] = [];
+  const maxTurnWindow = 20;
+
+  for (let i = 0; i < indexed.length; i++) {
+    const current = indexed[i];
+
+    if (current.isUserMessage && current.key) {
+      const userSeq = current.key.seq;
+      const family = current.key.family;
+
+      // Find insertion point: before preceding unowned tool items
+      let insertAt = result.length;
+      let foundOwnedTools = false;
+
+      for (let j = result.length - 1; j >= 0; j--) {
+        const prev = result[j];
+        if (!prev.key || prev.key.family !== family) break;
+        // Any message marks turn boundary - tools before it belong to that turn
+        if (prev.isUserMessage || prev.isAssistantMessage) {
+          foundOwnedTools = true;
+          break;
+        }
+        // Only move tool/explore items, not reasoning/diff/review/todo
+        if (!prev.isToolItem) break;
+        // Tool item with lower seq - check if same turn
+        if (prev.key.seq < userSeq && userSeq - prev.key.seq <= maxTurnWindow) {
+          insertAt = j;
+        } else {
+          break;
+        }
+      }
+
+      // Only move if the tools are unowned (no prior message claimed them)
+      if (foundOwnedTools) {
+        insertAt = result.length;
+      }
+
+      result.splice(insertAt, 0, current);
+    } else {
+      result.push(current);
+    }
+  }
+
+  return result.map((entry) => entry.item);
 }
 
 export function prepareThreadItems(items: ConversationItem[]) {
