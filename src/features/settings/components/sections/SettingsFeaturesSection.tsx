@@ -24,7 +24,7 @@ export function SettingsFeaturesSection({
       </div>
       {hasCodexHomeOverrides && (
         <div className="settings-help">
-          Feature settings are stored in the default CODEX_HOME config.toml.
+          Feature settings are stored in the global ~/.config/opencode/opencode.json.
           <br />
           Workspace overrides are not updated.
         </div>
@@ -33,7 +33,7 @@ export function SettingsFeaturesSection({
         <div>
           <div className="settings-toggle-title">Config file</div>
           <div className="settings-toggle-subtitle">
-            Open the Codex config in {fileManagerName()}.
+            Open the OpenCode config in {fileManagerName()}.
           </div>
         </div>
         <button type="button" className="ghost" onClick={onOpenConfig}>
@@ -49,8 +49,8 @@ export function SettingsFeaturesSection({
         <div>
           <div className="settings-toggle-title">Personality</div>
           <div className="settings-toggle-subtitle">
-            Choose Codex communication style (writes top-level <code>personality</code> in
-            config.toml).
+            Choose OpenCode communication style (writes top-level <code>personality</code> in
+            opencode.json).
           </div>
         </div>
         <select
@@ -98,7 +98,7 @@ export function SettingsFeaturesSection({
         <div>
           <div className="settings-toggle-title">Multi-agent</div>
           <div className="settings-toggle-subtitle">
-            Enable multi-agent collaboration tools in Codex.
+            Enable multi-agent collaboration tools in OpenCode.
           </div>
         </div>
         <button

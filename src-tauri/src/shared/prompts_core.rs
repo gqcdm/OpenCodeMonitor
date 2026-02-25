@@ -323,7 +323,7 @@ pub(crate) async fn prompts_global_dir_core(
     let workspaces = workspaces.lock().await;
     let entry = require_workspace_entry(&workspaces, &workspace_id)?;
     let dir = default_prompts_dir_for_workspace(&workspaces, &entry)
-        .ok_or("Unable to resolve CODEX_HOME".to_string())?;
+        .ok_or("Unable to resolve OpenCode config directory".to_string())?;
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     Ok(dir.to_string_lossy().to_string())
 }
@@ -349,7 +349,7 @@ pub(crate) async fn prompts_create_core(
             }
             "global" => {
                 let dir = default_prompts_dir_for_workspace(&workspaces, &entry)
-                    .ok_or("Unable to resolve CODEX_HOME".to_string())?;
+                    .ok_or("Unable to resolve OpenCode config directory".to_string())?;
                 (dir, "global")
             }
             _ => return Err("Invalid scope.".to_string()),
