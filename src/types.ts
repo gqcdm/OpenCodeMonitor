@@ -78,6 +78,8 @@ export type ConversationItem =
       role: "user" | "assistant";
       text: string;
       images?: string[];
+      /** Incremented when streaming completes to force markdown re-render */
+      renderVersion?: number;
     }
   | { id: string; kind: "reasoning"; summary: string; content: string }
   | { id: string; kind: "diff"; title: string; diff: string; status?: string }

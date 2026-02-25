@@ -360,6 +360,7 @@ export const MessageRow = memo(function MessageRow({
         )}
         {hasText && (
           <Markdown
+            key={`${item.id}-${item.renderVersion ?? 0}`}
             value={item.text}
             className="markdown"
             codeBlockStyle="message"

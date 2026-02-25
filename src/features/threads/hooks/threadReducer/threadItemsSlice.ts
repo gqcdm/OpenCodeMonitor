@@ -71,9 +71,12 @@ export function reduceThreadItems(state: ThreadState, action: ThreadAction): Thr
       const index = list.findIndex((msg) => msg.id === action.itemId);
       if (index >= 0 && list[index].kind === "message") {
         const existing = list[index];
+        const prevVersion =
+          "renderVersion" in existing ? (existing.renderVersion ?? 0) : 0;
         list[index] = {
           ...existing,
           text: action.text || existing.text,
+          renderVersion: prevVersion + 1,
         };
       } else {
         list.push({
@@ -81,6 +84,7 @@ export function reduceThreadItems(state: ThreadState, action: ThreadAction): Thr
           kind: "message",
           role: "assistant",
           text: action.text,
+          renderVersion: 1,
         });
       }
       const updatedItems = prepareThreadItems(list);

@@ -115,12 +115,6 @@ export function mergeStreamingText(existing: string, delta: string) {
   if (existing.startsWith(delta)) {
     return existing;
   }
-  const maxOverlap = Math.min(existing.length, delta.length);
-  for (let length = maxOverlap; length > 0; length -= 1) {
-    if (existing.endsWith(delta.slice(0, length))) {
-      return `${existing}${delta.slice(length)}`;
-    }
-  }
   return `${existing}${delta}`;
 }
 
