@@ -183,6 +183,7 @@ describe("tauri invoke wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("compact_thread", {
       workspaceId: "ws-10",
       threadId: "thread-10",
+      model: null,
     });
   });
 

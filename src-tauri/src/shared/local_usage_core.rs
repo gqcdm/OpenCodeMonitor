@@ -945,7 +945,7 @@ mod tests {
 
         let mut daily: HashMap<String, DailyTotals> = HashMap::new();
         daily.insert(day_key.to_string(), DailyTotals::default());
-        let mut model_totals: HashMap<String, i64> = HashMap::new();
+        let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
         scan_file(&path, &mut daily, &mut model_totals, None).expect("scan file");
 
         let totals = daily.get(day_key).copied().unwrap_or_default();
@@ -963,7 +963,7 @@ mod tests {
 
         let mut daily: HashMap<String, DailyTotals> = HashMap::new();
         daily.insert(day_key.to_string(), DailyTotals::default());
-        let mut model_totals: HashMap<String, i64> = HashMap::new();
+        let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
         scan_file(&path, &mut daily, &mut model_totals, None).expect("scan file");
 
         let totals = daily.get(day_key).copied().unwrap_or_default();
@@ -982,7 +982,7 @@ mod tests {
 
         let mut daily: HashMap<String, DailyTotals> = HashMap::new();
         daily.insert(day_key.to_string(), DailyTotals::default());
-        let mut model_totals: HashMap<String, i64> = HashMap::new();
+        let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
         scan_file(&path, &mut daily, &mut model_totals, None).expect("scan file");
 
         let totals = daily.get(day_key).copied().unwrap_or_default();
@@ -1000,7 +1000,7 @@ mod tests {
 
         let mut daily: HashMap<String, DailyTotals> = HashMap::new();
         daily.insert(day_key.to_string(), DailyTotals::default());
-        let mut model_totals: HashMap<String, i64> = HashMap::new();
+        let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
         scan_file(&path, &mut daily, &mut model_totals, None).expect("scan file");
 
         let totals = daily.get(day_key).copied().unwrap_or_default();
@@ -1017,7 +1017,7 @@ mod tests {
 
         let mut daily: HashMap<String, DailyTotals> = HashMap::new();
         daily.insert(day_key.to_string(), DailyTotals::default());
-        let mut model_totals: HashMap<String, i64> = HashMap::new();
+        let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
         scan_file(&path, &mut daily, &mut model_totals, None).expect("scan file");
 
         let totals = daily.get(day_key).copied().unwrap_or_default();
@@ -1035,7 +1035,7 @@ mod tests {
 
         let mut daily: HashMap<String, DailyTotals> = HashMap::new();
         daily.insert(day_key.to_string(), DailyTotals::default());
-        let mut model_totals: HashMap<String, i64> = HashMap::new();
+        let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
         scan_file(&path, &mut daily, &mut model_totals, None).expect("scan file");
 
         let totals = daily.get(day_key).copied().unwrap_or_default();
@@ -1053,7 +1053,7 @@ mod tests {
 
         let mut daily: HashMap<String, DailyTotals> = HashMap::new();
         daily.insert(day_key.to_string(), DailyTotals::default());
-        let mut model_totals: HashMap<String, i64> = HashMap::new();
+        let mut model_totals: HashMap<UsageModelKey, i64> = HashMap::new();
         scan_file(
             &path,
             &mut daily,

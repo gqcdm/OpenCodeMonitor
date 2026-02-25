@@ -856,7 +856,11 @@ fn translate_part_delta(properties: &Value, state: &mut SessionTranslationState)
             }
 
             let item_id = state.agent_message_item(&thread_id);
-            state.get_turn_state_mut(&thread_id).agent_message_text_len += delta.len();
+            let turn_state = state.get_turn_state_mut(&thread_id);
+            if !part_id.is_empty() && turn_state.agent_message_part_id.as_deref() != Some(part_id) {
+                turn_state.agent_message_part_id = Some(part_id.to_string());
+            }
+            turn_state.agent_message_text_len += delta.len();
             vec![json!({
                 "method": "item/agentMessage/delta",
                 "params": {
@@ -2720,8 +2724,8 @@ mod tests {
             }),
             &mut state,
         );
-        assert_eq!(active_events.len(), 1);
-        assert_eq!(active_events[0]["method"], "turn/started");
+        // Turn is already active from make_state(), so session.status=active is a no-op
+        assert_eq!(active_events.len(), 0);
 
         let second = translate_sse_event(
             &json!({
@@ -2920,7 +2924,10 @@ mod tests {
         state.mark_new_replayed_user_message_boundary();
         let second = state.user_message_item("ses_sub");
 
-        assert_ne!(first, second, "each replayed user message should get its own item ID");
+        assert_ne!(
+            first, second,
+            "each replayed user message should get its own item ID"
+        );
     }
 
     #[test]
