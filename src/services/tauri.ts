@@ -824,10 +824,19 @@ export async function getDictationModelStatus(
 export async function downloadDictationModel(
   modelId?: string | null,
 ): Promise<DictationModelStatus> {
-  return invoke<DictationModelStatus>(
-    "dictation_download_model",
-    withModelId(modelId),
-  );
+  const args = withModelId(modelId);
+  console.log("[tauri] invoking dictation_download_model with args:", args);
+  try {
+    const result = await invoke<DictationModelStatus>(
+      "dictation_download_model",
+      args,
+    );
+    console.log("[tauri] dictation_download_model returned:", result);
+    return result;
+  } catch (error) {
+    console.error("[tauri] dictation_download_model error:", error);
+    throw error;
+  }
 }
 
 export async function cancelDictationDownload(

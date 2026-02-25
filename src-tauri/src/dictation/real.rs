@@ -382,8 +382,17 @@ pub(crate) async fn dictation_download_model(
     state: State<'_, AppState>,
     model_id: Option<String>,
 ) -> Result<DictationModelStatus, String> {
+    eprintln!(
+        "[dictation] dictation_download_model called with model_id: {:?}",
+        model_id
+    );
     let model_id = resolve_model_id(&state, model_id).await;
+    eprintln!("[dictation] resolved model_id: {}", model_id);
     let current = refresh_status(&app, &state, &model_id).await;
+    eprintln!(
+        "[dictation] current status: state={:?}, model_id={}",
+        current.state, current.model_id
+    );
     if current.state == DictationModelState::Ready {
         return Ok(current);
     }
@@ -416,13 +425,17 @@ pub(crate) async fn dictation_download_model(
             path: None,
         };
     }
+    eprintln!("[dictation] emitting initial downloading status");
     emit_status(&app, &refresh_status(&app, &state, &model_id).await);
 
     let app_handle = app.clone();
     let model_id_clone = model_id.clone();
+    eprintln!("[dictation] spawning download task for model: {}", model_id);
     let task = tokio::spawn(async move {
+        eprintln!("[dictation] download task started for model: {}", model_id_clone);
         let state = app_handle.state::<AppState>();
         let model_dir = model_dir(&app_handle);
+        eprintln!("[dictation] model_dir: {:?}", model_dir);
         let model_path = match model_path(&app_handle, &model_id_clone) {
             Ok(path) => path,
             Err(error) => {
@@ -468,7 +481,10 @@ pub(crate) async fn dictation_download_model(
         }
 
         let (url, expected_sha) = match model_info(&model_id_clone) {
-            Some(info) => (info.url, info.sha256),
+            Some(info) => {
+                eprintln!("[dictation] model URL: {}", info.url);
+                (info.url, info.sha256)
+            }
             None => {
                 let status = DictationModelStatus {
                     state: DictationModelState::Error,
@@ -501,8 +517,12 @@ pub(crate) async fn dictation_download_model(
                 return;
             }
         };
+        eprintln!("[dictation] starting HTTP GET request...");
         let response = match client.get(url).send().await {
-            Ok(response) => response,
+            Ok(response) => {
+                eprintln!("[dictation] HTTP response received, status: {}", response.status());
+                response
+            }
             Err(error) => {
                 let status = DictationModelStatus {
                     state: DictationModelState::Error,
@@ -668,6 +688,7 @@ pub(crate) async fn dictation_download_model(
             return;
         }
 
+        eprintln!("[dictation] download completed successfully for model: {}", model_id_clone);
         let status = ready_status(&model_id_clone, &model_path);
         update_status(&app_handle, &state, status).await;
         clear_download_state(&state).await;
@@ -678,7 +699,12 @@ pub(crate) async fn dictation_download_model(
         dictation.download_task = Some(task);
     }
 
-    Ok(refresh_status(&app, &state, &model_id).await)
+    let final_status = refresh_status(&app, &state, &model_id).await;
+    eprintln!(
+        "[dictation] dictation_download_model returning: state={:?}, model_id={}",
+        final_status.state, final_status.model_id
+    );
+    Ok(final_status)
 }
 
 #[tauri::command]

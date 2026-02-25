@@ -203,7 +203,11 @@ export function SettingsDictationSection({
               <button
                 type="button"
                 className="primary"
-                onClick={onDownloadDictationModel}
+                onClick={() => {
+                  console.log("[SettingsDictationSection] Download model button clicked");
+                  console.log("[SettingsDictationSection] onDownloadDictationModel exists:", !!onDownloadDictationModel);
+                  onDownloadDictationModel?.();
+                }}
                 disabled={!onDownloadDictationModel}
               >
                 Download model

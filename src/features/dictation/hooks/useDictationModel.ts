@@ -39,11 +39,19 @@ export function useDictationModel(modelId: string | null): UseDictationModelResu
     })();
 
     const unlisten = subscribeDictationDownload((event) => {
+      console.log("[useDictationModel] received dictation-download event:", event);
       if (!active) {
+        console.log("[useDictationModel] ignoring event - component not active");
         return;
       }
       if (!modelId || event.modelId === modelId) {
+        console.log("[useDictationModel] updating status from event");
         setStatus(event);
+      } else {
+        console.log("[useDictationModel] ignoring event - modelId mismatch:", {
+          expected: modelId,
+          received: event.modelId,
+        });
       }
     });
 
@@ -54,8 +62,15 @@ export function useDictationModel(modelId: string | null): UseDictationModelResu
   }, [modelId]);
 
   const download = useCallback(async () => {
-    const next = await downloadDictationModel(modelId);
-    setStatus(next);
+    console.log("[useDictationModel] download() called with modelId:", modelId);
+    try {
+      const next = await downloadDictationModel(modelId);
+      console.log("[useDictationModel] download() returned:", next);
+      setStatus(next);
+    } catch (error) {
+      console.error("[useDictationModel] download() error:", error);
+      throw error;
+    }
   }, [modelId]);
 
   const cancel = useCallback(async () => {
