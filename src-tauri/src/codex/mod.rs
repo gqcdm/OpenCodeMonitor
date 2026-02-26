@@ -9,7 +9,8 @@ pub(crate) mod config;
 pub(crate) mod home;
 
 use crate::backend::app_server::{
-    global_rest_get, opencode_server_status as app_server_status,
+    global_rest_get, opencode_restart_required_status as app_server_restart_required_status,
+    opencode_server_status as app_server_status,
     restart_opencode_server as app_server_restart,
     spawn_workspace_session as spawn_workspace_session_inner,
     takeover_external_server as app_server_takeover,
@@ -556,6 +557,18 @@ pub(crate) async fn settings_model_list(
         );
     }
     Ok(response)
+}
+
+#[tauri::command]
+pub(crate) async fn opencode_restart_required_status(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(&*state, app, "opencode_restart_required_status", json!({}))
+            .await;
+    }
+    Ok(app_server_restart_required_status().await)
 }
 
 #[tauri::command]

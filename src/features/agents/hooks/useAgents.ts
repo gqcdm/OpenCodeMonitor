@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentOption, DebugEntry, WorkspaceInfo } from "../../../types";
 import { getAgentList } from "../../../services/tauri";
+import { subscribeOpenCodeServerRestarted } from "../../../services/opencodeRestartNotice";
 
 type UseAgentsOptions = {
   activeWorkspace: WorkspaceInfo | null;
@@ -69,6 +70,16 @@ export function useAgents({ activeWorkspace, onDebug }: UseAgentsOptions) {
     }
     refreshAgents();
   }, [isConnected, refreshAgents, agents.length, workspaceId]);
+
+  useEffect(() => {
+    return subscribeOpenCodeServerRestarted(() => {
+      if (!workspaceId || !isConnected) {
+        return;
+      }
+      lastFetchedWorkspaceId.current = null;
+      void refreshAgents();
+    });
+  }, [isConnected, refreshAgents, workspaceId]);
 
   const agentOptions = useMemo(
     () => agents.filter((agent) => agent.name),

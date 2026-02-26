@@ -555,12 +555,27 @@ export type OpenCodeServerStatus = {
   health?: unknown;
 };
 
+export type OpenCodeRestartRequiredStatus = {
+  required: boolean;
+  detected: boolean;
+  managed?: boolean;
+  healthy?: boolean;
+  configPath?: string;
+  serverStartedAt?: string | null;
+  latestConfigChangeAt?: string | null;
+  reason?: string | null;
+};
+
 export async function getSettingsModelList(workspaceId?: string | null) {
   return invoke<any>("settings_model_list", { workspaceId: workspaceId ?? null });
 }
 
 export async function getOpenCodeServerStatus() {
   return invoke<OpenCodeServerStatus>("opencode_server_status");
+}
+
+export async function getOpenCodeRestartRequiredStatus() {
+  return invoke<OpenCodeRestartRequiredStatus>("opencode_restart_required_status");
 }
 
 export async function restartOpenCodeServer() {

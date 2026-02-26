@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DebugEntry, ModelOption, WorkspaceInfo } from "../../../types";
 import { getConfigModel, getModelList } from "../../../services/tauri";
 import { subscribeAppServerEvents } from "../../../services/events";
+import { subscribeOpenCodeServerRestarted } from "../../../services/opencodeRestartNotice";
 import { getAppServerRawMethod } from "../../../utils/appServerEvents";
 import {
   normalizeEffortValue,
@@ -354,6 +355,16 @@ export function useModels({
       clearTimeout(timerId);
     };
   }, [workspaceId, isConnected, models.length, refreshModels]);
+
+  useEffect(() => {
+    return subscribeOpenCodeServerRestarted(() => {
+      if (!workspaceId || !isConnected) {
+        return;
+      }
+      lastFetchedWorkspaceId.current = null;
+      void refreshModels();
+    });
+  }, [isConnected, refreshModels, workspaceId]);
 
   useEffect(() => {
     if (!selectedModel) {

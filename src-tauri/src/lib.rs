@@ -280,6 +280,7 @@ pub fn run() {
             git::create_git_branch,
             codex::model_list,
             codex::settings_model_list,
+            codex::opencode_restart_required_status,
             codex::opencode_server_status,
             codex::opencode_server_restart,
             codex::opencode_server_takeover,

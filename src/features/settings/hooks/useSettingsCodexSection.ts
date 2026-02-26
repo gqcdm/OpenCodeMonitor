@@ -14,6 +14,11 @@ import {
   restartOpenCodeServer,
   takeoverOpenCodeServer,
 } from "@services/tauri";
+import {
+  clearOpenCodeRestartRequired,
+  markOpenCodeRestartRequired,
+  notifyOpenCodeServerRestarted,
+} from "@services/opencodeRestartNotice";
 import { useGlobalAgentsMd } from "./useGlobalAgentsMd";
 import { useGlobalOpenCodeConfig } from "./useGlobalCodexConfigToml";
 import { useSettingsDefaultModels } from "./useSettingsDefaultModels";
@@ -270,6 +275,7 @@ export const useSettingsCodexSection = ({
         codexBin: nextCodexBin,
         codexArgs: nextCodexArgs,
       });
+      markOpenCodeRestartRequired("OpenCode path or args changed.");
     } finally {
       setIsSavingSettings(false);
     }
@@ -348,6 +354,8 @@ export const useSettingsCodexSection = ({
       } else {
         await refreshOpenCodeServerStatus();
       }
+      clearOpenCodeRestartRequired();
+      notifyOpenCodeServerRestarted();
       await refreshDefaultModels();
     } catch (error) {
       setOpenCodeServerStatusError(error instanceof Error ? error.message : String(error));
@@ -367,6 +375,8 @@ export const useSettingsCodexSection = ({
       } else {
         await refreshOpenCodeServerStatus();
       }
+      clearOpenCodeRestartRequired();
+      notifyOpenCodeServerRestarted();
       await refreshDefaultModels();
     } catch (error) {
       setOpenCodeServerStatusError(error instanceof Error ? error.message : String(error));
@@ -439,15 +449,33 @@ export const useSettingsCodexSection = ({
       void refreshGlobalAgents();
     },
     onSaveGlobalAgents: () => {
-      void saveGlobalAgents();
+      void (async () => {
+        const saved = await saveGlobalAgents();
+        if (saved) {
+          markOpenCodeRestartRequired("Global AGENTS.md changed.");
+        }
+      })();
     },
     onRefreshGlobalConfig: () => {
       void refreshGlobalConfig();
     },
     onSaveGlobalConfig: () => {
-      void saveGlobalConfig();
+      void (async () => {
+        const saved = await saveGlobalConfig();
+        if (saved) {
+          markOpenCodeRestartRequired("OpenCode config changed.");
+        }
+      })();
     },
-    onUpdateWorkspaceCodexBin,
-    onUpdateWorkspaceSettings,
+    onUpdateWorkspaceCodexBin: async (id, codexBin) => {
+      await onUpdateWorkspaceCodexBin(id, codexBin);
+      markOpenCodeRestartRequired("Workspace OpenCode binary override changed.");
+    },
+    onUpdateWorkspaceSettings: async (id, settings) => {
+      await onUpdateWorkspaceSettings(id, settings);
+      if ("codexHome" in settings || "codexArgs" in settings) {
+        markOpenCodeRestartRequired("Workspace OpenCode override changed.");
+      }
+    },
   };
 };

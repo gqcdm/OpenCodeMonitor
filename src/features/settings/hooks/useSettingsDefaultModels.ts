@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ModelOption, WorkspaceInfo } from "@/types";
 import { getSettingsModelList } from "@services/tauri";
+import { subscribeOpenCodeServerRestarted } from "@services/opencodeRestartNotice";
 import { parseModelListResponse } from "@/features/models/utils/modelListResponse";
 
 type SettingsDefaultModelsState = {
@@ -107,6 +108,12 @@ export function useSettingsDefaultModels(
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    return subscribeOpenCodeServerRestarted(() => {
+      void refresh();
+    });
   }, [refresh]);
 
   return {

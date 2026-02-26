@@ -1,9 +1,18 @@
 import ScrollText from "lucide-react/dist/esm/icons/scroll-text";
 import Settings from "lucide-react/dist/esm/icons/settings";
+import RotateCcw from "lucide-react/dist/esm/icons/rotate-ccw";
 import User from "lucide-react/dist/esm/icons/user";
 import X from "lucide-react/dist/esm/icons/x";
 import { useEffect, useRef, useState } from "react";
 import { PopoverSurface } from "../../design-system/components/popover/PopoverPrimitives";
+import { getOpenCodeRestartRequiredStatus, restartOpenCodeServer } from "@services/tauri";
+import {
+  clearOpenCodeRestartRequired,
+  markOpenCodeRestartRequired,
+  notifyOpenCodeServerRestarted,
+  readOpenCodeRestartNotice,
+  subscribeOpenCodeRestartNotice,
+} from "@services/opencodeRestartNotice";
 import { useDismissibleMenu } from "../hooks/useDismissibleMenu";
 
 type SidebarCornerActionsProps = {
@@ -34,6 +43,8 @@ export function SidebarCornerActions({
   onCancelSwitchAccount,
 }: SidebarCornerActionsProps) {
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [restartNotice, setRestartNotice] = useState(readOpenCodeRestartNotice);
+  const [restartingServer, setRestartingServer] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
 
   useDismissibleMenu({
@@ -48,75 +59,141 @@ export function SidebarCornerActions({
     }
   }, [showAccountSwitcher]);
 
+  useEffect(() => subscribeOpenCodeRestartNotice(setRestartNotice), []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkRestartRequirement = async () => {
+      try {
+        const status = await getOpenCodeRestartRequiredStatus();
+        if (cancelled || !status.detected) {
+          return;
+        }
+        if (status.required) {
+          markOpenCodeRestartRequired(status.reason ?? "OpenCode config changed.");
+        } else {
+          clearOpenCodeRestartRequired();
+        }
+      } catch {
+        // No-op: banner is best-effort and should not break sidebar interactions.
+      }
+    };
+
+    void checkRestartRequirement();
+    const onFocus = () => {
+      void checkRestartRequirement();
+    };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
+  const handleRestartServer = async () => {
+    if (restartingServer) {
+      return;
+    }
+    setRestartingServer(true);
+    try {
+      await restartOpenCodeServer();
+      clearOpenCodeRestartRequired();
+      notifyOpenCodeServerRestarted();
+    } finally {
+      setRestartingServer(false);
+    }
+  };
+
+  const restartTooltip = restartNotice.reason
+    ? `OpenCode config changes are pending. ${restartNotice.reason} Restart the OpenCode server to apply updated agents and models.`
+    : "OpenCode config changes are pending. Restart the OpenCode server to apply updated agents and models.";
+
   return (
     <div className="sidebar-corner-actions">
-      {showAccountSwitcher && (
-        <div className="sidebar-account-menu" ref={accountMenuRef}>
-          <button
-            className="ghost sidebar-corner-button"
-            type="button"
-            onClick={() => setAccountMenuOpen((open) => !open)}
-            aria-label="Account"
-            title="Account"
-          >
-            <User size={14} aria-hidden />
-          </button>
-          {accountMenuOpen && (
-            <PopoverSurface className="sidebar-account-popover" role="dialog">
-              <div className="sidebar-account-title">Account</div>
-              <div className="sidebar-account-value">{accountLabel}</div>
-              <div className="sidebar-account-actions-row">
-                <button
-                  type="button"
-                  className="primary sidebar-account-action"
-                  onClick={onSwitchAccount}
-                  disabled={accountDisabled}
-                  aria-busy={accountSwitching}
-                >
-                  <span className="sidebar-account-action-content">
-                    {accountSwitching && (
-                      <span className="sidebar-account-spinner" aria-hidden />
-                    )}
-                    <span>{accountActionLabel}</span>
-                  </span>
-                </button>
-                {accountSwitching && (
-                  <button
-                    type="button"
-                    className="secondary sidebar-account-cancel"
-                    onClick={onCancelSwitchAccount}
-                    disabled={accountCancelDisabled}
-                    aria-label="Cancel account switch"
-                    title="Cancel"
-                  >
-                    <X size={12} aria-hidden />
-                  </button>
-                )}
-              </div>
-            </PopoverSurface>
-          )}
-        </div>
+      {restartNotice.required && (
+        <button
+          type="button"
+          className={`sidebar-restart-banner${restartingServer ? " is-restarting" : ""}`}
+          onClick={() => void handleRestartServer()}
+          disabled={restartingServer}
+          aria-label="Restart OpenCode server to apply config changes"
+          title={restartTooltip}
+        >
+          <RotateCcw size={12} aria-hidden />
+          <span>{restartingServer ? "Restarting..." : "Restart OpenCode"}</span>
+        </button>
       )}
-      <button
-        className="ghost sidebar-corner-button"
-        type="button"
-        onClick={onOpenSettings}
-        aria-label="Open settings"
-        title="Settings"
-      >
-        <Settings size={14} aria-hidden />
-      </button>
-      {showDebugButton && (
+      <div className="sidebar-corner-actions-row">
         <button
           className="ghost sidebar-corner-button"
           type="button"
-          onClick={onOpenDebug}
-          aria-label="Open debug log"
-          title="Debug log"
+          onClick={onOpenSettings}
+          aria-label="Open settings"
+          title="Settings"
         >
-          <ScrollText size={14} aria-hidden />
+          <Settings size={14} aria-hidden />
         </button>
-      )}
+        {showDebugButton && (
+          <button
+            className="ghost sidebar-corner-button"
+            type="button"
+            onClick={onOpenDebug}
+            aria-label="Open debug log"
+            title="Debug log"
+          >
+            <ScrollText size={14} aria-hidden />
+          </button>
+        )}
+        {showAccountSwitcher && (
+          <div className="sidebar-account-menu" ref={accountMenuRef}>
+            <button
+              className="ghost sidebar-corner-button"
+              type="button"
+              onClick={() => setAccountMenuOpen((open) => !open)}
+              aria-label="Account"
+              title="Account"
+            >
+              <User size={14} aria-hidden />
+            </button>
+            {accountMenuOpen && (
+              <PopoverSurface className="sidebar-account-popover" role="dialog">
+                <div className="sidebar-account-title">Account</div>
+                <div className="sidebar-account-value">{accountLabel}</div>
+                <div className="sidebar-account-actions-row">
+                  <button
+                    type="button"
+                    className="primary sidebar-account-action"
+                    onClick={onSwitchAccount}
+                    disabled={accountDisabled}
+                    aria-busy={accountSwitching}
+                  >
+                    <span className="sidebar-account-action-content">
+                      {accountSwitching && (
+                        <span className="sidebar-account-spinner" aria-hidden />
+                      )}
+                      <span>{accountActionLabel}</span>
+                    </span>
+                  </button>
+                  {accountSwitching && (
+                    <button
+                      type="button"
+                      className="secondary sidebar-account-cancel"
+                      onClick={onCancelSwitchAccount}
+                      disabled={accountCancelDisabled}
+                      aria-label="Cancel account switch"
+                      title="Cancel"
+                    >
+                      <X size={12} aria-hidden />
+                    </button>
+                  )}
+                </div>
+              </PopoverSurface>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -1325,8 +1325,53 @@
   left: var(--sidebar-padding);
   bottom: 16px;
   display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.sidebar-corner-actions-row {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.sidebar-restart-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 172, 70, 0.34);
+  background:
+    linear-gradient(180deg, rgba(245, 172, 70, 0.16), rgba(245, 172, 70, 0.08)),
+    rgba(18, 22, 30, 0.86);
+  color: rgba(255, 228, 181, 0.96);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
+  transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.sidebar-restart-banner:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(245, 172, 70, 0.5);
+}
+
+.sidebar-restart-banner:disabled {
+  opacity: 0.8;
+  cursor: default;
+}
+
+.sidebar-restart-banner svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.sidebar-restart-banner.is-restarting svg {
+  animation: sidebar-account-spin 0.8s linear infinite;
 }
 
 .sidebar-corner-button {

@@ -144,6 +144,116 @@ async fn try_reclaim_orphaned_server() -> bool {
     true
 }
 
+fn parse_pid_started_at(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+async fn latest_change_under_dir(root: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut latest = None;
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let metadata = match entry.metadata().await {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+
+            if let Ok(modified) = metadata.modified() {
+                let modified_at = chrono::DateTime::<chrono::Utc>::from(modified);
+                latest = Some(match latest {
+                    Some(current) if current >= modified_at => current,
+                    _ => modified_at,
+                });
+            }
+
+            if metadata.is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+
+    latest
+}
+
+pub(crate) async fn opencode_restart_required_status() -> Value {
+    let Some(config_root) = crate::codex::home::resolve_default_codex_home() else {
+        return json!({
+            "required": false,
+            "detected": false,
+            "reason": "Unable to resolve OpenCode config home"
+        });
+    };
+
+    let base_url = rest_base_url();
+    let server_healthy = health_check(&base_url).await.is_ok();
+    let managed = is_server_owned().await;
+
+    if !server_healthy || !managed {
+        return json!({
+            "required": false,
+            "detected": false,
+            "managed": managed,
+            "healthy": server_healthy,
+            "configPath": config_root,
+            "reason": if !server_healthy {
+                "OpenCode server is not running"
+            } else {
+                "OpenCode server is not managed by OpenCode Monitor"
+            }
+        });
+    }
+
+    let Some(pid_data) = read_pid_file().await else {
+        return json!({
+            "required": false,
+            "detected": false,
+            "managed": true,
+            "healthy": true,
+            "configPath": config_root,
+            "reason": "Missing managed server PID metadata"
+        });
+    };
+
+    let Some(server_started_at) = parse_pid_started_at(&pid_data.started_at) else {
+        return json!({
+            "required": false,
+            "detected": false,
+            "managed": true,
+            "healthy": true,
+            "configPath": config_root,
+            "reason": "Invalid managed server start timestamp"
+        });
+    };
+
+    let latest_change = latest_change_under_dir(&config_root).await;
+    let required = latest_change
+        .map(|changed_at| changed_at > server_started_at)
+        .unwrap_or(false);
+
+    json!({
+        "required": required,
+        "detected": true,
+        "managed": true,
+        "healthy": true,
+        "configPath": config_root,
+        "serverStartedAt": server_started_at.to_rfc3339(),
+        "latestConfigChangeAt": latest_change.map(|dt| dt.to_rfc3339()),
+        "reason": if required {
+            Some("OpenCode config changed after the managed server started")
+        } else {
+            None::<&str>
+        }
+    })
+}
+
 /// Kill process listening on the REST port (for takeover functionality).
 #[cfg(target_os = "macos")]
 async fn kill_process_on_port(port: u16) -> Result<(), String> {
