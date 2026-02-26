@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use tokio::process::{Child, Command};
@@ -53,6 +54,7 @@ const REST_PORT: u16 = 14096;
 struct ServerProcess {
     child: Child,
     base_url: String,
+    started_at: DateTime<Utc>,
 }
 
 fn rest_base_url() -> String {
@@ -78,7 +80,7 @@ fn pid_file_path() -> Option<PathBuf> {
 }
 
 /// Write PID file after starting the server.
-async fn write_pid_file(pid: u32, port: u16) -> Result<(), String> {
+async fn write_pid_file(pid: u32, port: u16, started_at: DateTime<Utc>) -> Result<(), String> {
     let path = pid_file_path().ok_or("Could not determine PID file path")?;
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -88,7 +90,7 @@ async fn write_pid_file(pid: u32, port: u16) -> Result<(), String> {
     let data = PidFileData {
         pid,
         port,
-        started_at: chrono::Utc::now().to_rfc3339(),
+        started_at: started_at.to_rfc3339(),
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     tokio::fs::write(&path, json)
@@ -117,18 +119,18 @@ fn is_process_running(pid: u32) -> bool {
 }
 
 /// Try to reclaim an orphaned server (one we previously started but lost track of).
-/// Returns true if we successfully reclaimed, false otherwise.
-async fn try_reclaim_orphaned_server() -> bool {
+/// Returns PID metadata when we successfully reclaimed, None otherwise.
+async fn try_reclaim_orphaned_server() -> Option<PidFileData> {
     let pid_data = match read_pid_file().await {
         Some(data) => data,
-        None => return false,
+        None => return None,
     };
 
     // Check if the process is still running
     if !is_process_running(pid_data.pid) {
         // Stale PID file, clean it up
         delete_pid_file().await;
-        return false;
+        return None;
     }
 
     // Process is running - check if it's actually our server on the expected port
@@ -136,12 +138,86 @@ async fn try_reclaim_orphaned_server() -> bool {
     if health_check(&base_url).await.is_err() {
         // Process exists but isn't responding as our server - stale PID file
         delete_pid_file().await;
-        return false;
+        return None;
     }
 
     // Server is alive and healthy - this is an orphaned server we can reclaim
     // We can't actually adopt the Child handle, but we can track that we own it via PID
-    true
+    Some(pid_data)
+}
+
+fn parse_rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|ts| ts.with_timezone(&Utc))
+}
+
+async fn server_config_path(base_url: &str) -> Option<PathBuf> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .ok()?;
+    let response = client
+        .get(format!("{base_url}/path"))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let payload = response.json::<Value>().await.ok()?;
+    let config = payload.get("config")?.as_str()?.trim();
+    if config.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(config))
+}
+
+async fn latest_directory_change(root: PathBuf) -> Option<DateTime<Utc>> {
+    let mut latest = None;
+    let mut stack = vec![root];
+
+    while let Some(dir) = stack.pop() {
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let metadata = match entry.metadata().await {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+
+            if let Ok(modified) = metadata.modified() {
+                let modified_at = DateTime::<Utc>::from(modified);
+                latest = Some(match latest {
+                    Some(current) if current >= modified_at => current,
+                    _ => modified_at,
+                });
+            }
+
+            if metadata.is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+
+    latest
+}
+
+async fn should_restart_for_config_change(server_started_at: DateTime<Utc>, base_url: &str) -> bool {
+    let config_root = server_config_path(base_url)
+        .await
+        .or_else(crate::codex::home::resolve_default_codex_home);
+    let Some(config_root) = config_root else {
+        return false;
+    };
+
+    latest_directory_change(config_root)
+        .await
+        .map(|latest_change| latest_change > server_started_at)
+        .unwrap_or(false)
 }
 
 /// Kill process listening on the REST port (for takeover functionality).
@@ -215,6 +291,7 @@ async fn start_managed_server_process(
     codex_args: Option<&str>,
 ) -> Result<ServerProcess, String> {
     let base_url = rest_base_url();
+    let started_at = Utc::now();
     let mut command = build_codex_command_with_bin(
         codex_bin,
         codex_args,
@@ -239,7 +316,7 @@ async fn start_managed_server_process(
 
     // Write PID file for ownership tracking
     if let Some(pid) = child.id() {
-        if let Err(e) = write_pid_file(pid, REST_PORT).await {
+        if let Err(e) = write_pid_file(pid, REST_PORT, started_at.clone()).await {
             eprintln!("Warning: failed to write PID file: {e}");
         }
     }
@@ -256,7 +333,11 @@ async fn start_managed_server_process(
         sleep(Duration::from_millis(200)).await;
     }
 
-    Ok(ServerProcess { child, base_url })
+    Ok(ServerProcess {
+        child,
+        base_url,
+        started_at,
+    })
 }
 
 async fn ensure_server_running(
@@ -265,14 +346,29 @@ async fn ensure_server_running(
 ) -> Result<String, String> {
     let base_url = rest_base_url();
 
-    // Fast path: if already initialized, just return the URL.
-    if SERVER_PROCESS.get().is_some() {
+    // Fast path: if already initialized and config has not changed, return the URL.
+    if let Some(server_mutex) = SERVER_PROCESS.get() {
+        let (started_at, server_base_url) = {
+            let guard = server_mutex.lock().await;
+            (guard.started_at, guard.base_url.clone())
+        };
+        if should_restart_for_config_change(started_at, &server_base_url).await {
+            restart_opencode_server(codex_bin.clone(), codex_args).await?;
+        }
         return Ok(base_url);
     }
 
     // Check if we have an orphaned server we can reclaim (via PID file).
     // This happens when the app crashed/exited but the server kept running.
-    if try_reclaim_orphaned_server().await {
+    if let Some(pid_data) = try_reclaim_orphaned_server().await {
+        if let Some(started_at) = parse_rfc3339_timestamp(&pid_data.started_at) {
+            if should_restart_for_config_change(started_at, &base_url).await {
+                restart_opencode_server(codex_bin, codex_args).await?;
+            }
+        } else {
+            // Legacy/invalid PID timestamp - safest option is to restart.
+            restart_opencode_server(codex_bin, codex_args).await?;
+        }
         return Ok(base_url);
     }
 
@@ -488,6 +584,10 @@ pub(crate) async fn takeover_external_server(
 
 pub(crate) struct WorkspaceSession {
     pub(crate) entry: WorkspaceEntry,
+    /// Resolved OpenCode binary used to (re)start the managed server when needed.
+    pub(crate) codex_bin: Option<String>,
+    /// Resolved OpenCode args used to (re)start the managed server when needed.
+    pub(crate) codex_args: Option<String>,
     /// HTTP client for REST calls to the OpenCode server.
     pub(crate) http_client: reqwest::Client,
     /// Base URL of the OpenCode server (e.g. "http://127.0.0.1:14096").
@@ -530,6 +630,7 @@ async fn route_translated_event_to_background_callback(
 impl WorkspaceSession {
     /// Send a GET request to the OpenCode REST API, scoped to this workspace.
     pub(crate) async fn rest_get(&self, path: &str) -> Result<Value, String> {
+        ensure_server_running(self.codex_bin.clone(), self.codex_args.as_deref()).await?;
         let separator = if path.contains('?') { "&" } else { "?" };
         let url = format!(
             "{}{path}{separator}directory={}",
@@ -552,6 +653,7 @@ impl WorkspaceSession {
 
     /// Send a POST request to the OpenCode REST API, scoped to this workspace.
     pub(crate) async fn rest_post(&self, path: &str, body: Value) -> Result<Value, String> {
+        ensure_server_running(self.codex_bin.clone(), self.codex_args.as_deref()).await?;
         let separator = if path.contains('?') { "&" } else { "?" };
         let url = format!(
             "{}{path}{separator}directory={}",
@@ -584,6 +686,7 @@ impl WorkspaceSession {
 
     /// Send a POST request that returns a boolean (e.g. abort, permissions).
     pub(crate) async fn rest_post_bool(&self, path: &str, body: Value) -> Result<bool, String> {
+        ensure_server_running(self.codex_bin.clone(), self.codex_args.as_deref()).await?;
         let separator = if path.contains('?') { "&" } else { "?" };
         let url = format!(
             "{}{path}{separator}directory={}",
@@ -609,6 +712,7 @@ impl WorkspaceSession {
 
     /// Send a PATCH request to the OpenCode REST API, scoped to this workspace.
     pub(crate) async fn rest_patch(&self, path: &str, body: Value) -> Result<Value, String> {
+        ensure_server_running(self.codex_bin.clone(), self.codex_args.as_deref()).await?;
         let separator = if path.contains('?') { "&" } else { "?" };
         let url = format!(
             "{}{path}{separator}directory={}",
@@ -983,10 +1087,12 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         .clone()
         .filter(|value| !value.trim().is_empty())
         .or(default_codex_bin);
+    let resolved_codex_args = codex_args;
     let _ = check_codex_installation(codex_bin.clone()).await?;
 
     // Ensure the shared `opencode serve` process is running.
-    let base_url = ensure_server_running(codex_bin, codex_args.as_deref()).await?;
+    let base_url =
+        ensure_server_running(codex_bin.clone(), resolved_codex_args.as_deref()).await?;
 
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
@@ -997,6 +1103,8 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
 
     let session = Arc::new(WorkspaceSession {
         entry: entry.clone(),
+        codex_bin,
+        codex_args: resolved_codex_args,
         http_client,
         base_url,
         background_thread_callbacks: Mutex::new(HashMap::new()),

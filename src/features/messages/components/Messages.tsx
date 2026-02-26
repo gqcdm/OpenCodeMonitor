@@ -63,6 +63,17 @@ type MessagesProps = {
   onQuoteMessage?: (text: string) => void;
 };
 
+const SINGLE_FENCED_BLOCK_PATTERN =
+  /^\s*(```|~~~)[^\r\n]*\r?\n([\s\S]*?)\r?\n\1\s*$/;
+
+function getCopyableMessageText(text: string) {
+  const fencedMatch = text.match(SINGLE_FENCED_BLOCK_PATTERN);
+  if (!fencedMatch) {
+    return text;
+  }
+  return fencedMatch[2];
+}
+
 export const Messages = memo(function Messages({
   items,
   threadId,
@@ -279,7 +290,7 @@ export const Messages = memo(function Messages({
   const handleCopyMessage = useCallback(
     async (item: Extract<ConversationItem, { kind: "message" }>) => {
       try {
-        await navigator.clipboard.writeText(item.text);
+        await navigator.clipboard.writeText(getCopyableMessageText(item.text));
         setCopiedMessageId(item.id);
         if (copyTimeoutRef.current) {
           window.clearTimeout(copyTimeoutRef.current);

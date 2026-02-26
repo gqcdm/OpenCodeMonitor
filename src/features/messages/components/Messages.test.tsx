@@ -13,6 +13,11 @@ const useFileLinkOpenerMock = vi.fn(
 );
 const openFileLinkMock = vi.fn();
 const showFileLinkMenuMock = vi.fn();
+const writeTextMock = vi.fn();
+const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(
+  navigator,
+  "clipboard",
+);
 
 vi.mock("../hooks/useFileLinkOpener", () => ({
   useFileLinkOpener: (
@@ -31,12 +36,82 @@ describe("Messages", () => {
 
   afterEach(() => {
     cleanup();
+    if (originalClipboardDescriptor) {
+      Object.defineProperty(navigator, "clipboard", originalClipboardDescriptor);
+    } else {
+      delete (navigator as { clipboard?: Clipboard }).clipboard;
+    }
   });
 
   beforeEach(() => {
     useFileLinkOpenerMock.mockClear();
     openFileLinkMock.mockReset();
     showFileLinkMenuMock.mockReset();
+    writeTextMock.mockReset();
+    writeTextMock.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: writeTextMock,
+      },
+    });
+  });
+
+  it("copies only code content when the message is a single fenced block", async () => {
+    const items: ConversationItem[] = [
+      {
+        id: "msg-copy-fenced",
+        kind: "message",
+        role: "assistant",
+        text: '```bash\necho "hello"\nnpm run typecheck\n```',
+      },
+    ];
+
+    render(
+      <Messages
+        items={items}
+        threadId="thread-1"
+        workspaceId="ws-1"
+        isThinking={false}
+        openTargets={[]}
+        selectedOpenAppId=""
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith('echo "hello"\nnpm run typecheck');
+    });
+  });
+
+  it("keeps markdown unchanged when the message has prose and a fenced block", async () => {
+    const text = 'Run this:\n\n```bash\necho "hello"\n```';
+    const items: ConversationItem[] = [
+      {
+        id: "msg-copy-mixed",
+        kind: "message",
+        role: "assistant",
+        text,
+      },
+    ];
+
+    render(
+      <Messages
+        items={items}
+        threadId="thread-1"
+        workspaceId="ws-1"
+        isThinking={false}
+        openTargets={[]}
+        selectedOpenAppId=""
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith(text);
+    });
   });
 
   it("renders image grid above message text and opens lightbox", () => {

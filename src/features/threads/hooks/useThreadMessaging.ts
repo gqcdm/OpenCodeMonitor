@@ -191,37 +191,53 @@ export function useThreadMessaging({
   );
 
   useEffect(() => {
-    if (!activeWorkspace?.id || !activeWorkspace.connected) {
+    const workspaceId = activeWorkspace?.id;
+    const connected = Boolean(activeWorkspace?.connected);
+    if (!workspaceId || !connected) {
       return;
     }
+
     let cancelled = false;
-    void listSlashCommandsService(activeWorkspace.id)
-      .then((response) => {
-        if (cancelled) {
-          return;
-        }
-        const normalized = normalizeSlashCommandsResponse(response);
-        setSlashCommandsByWorkspace((prev) => ({
-          ...prev,
-          [activeWorkspace.id]: normalized,
-        }));
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-        onDebug?.({
-          id: `${Date.now()}-client-slash-commands-list-error`,
-          timestamp: Date.now(),
-          source: "error",
-          label: "slash_commands/list error",
-          payload: error instanceof Error ? error.message : String(error),
+
+    const refreshSlashCommands = () => {
+      void listSlashCommandsService(workspaceId)
+        .then((response) => {
+          if (cancelled) {
+            return;
+          }
+          const normalized = normalizeSlashCommandsResponse(response);
+          setSlashCommandsByWorkspace((prev) => ({
+            ...prev,
+            [workspaceId]: normalized,
+          }));
+        })
+        .catch((error) => {
+          if (cancelled) {
+            return;
+          }
+          onDebug?.({
+            id: `${Date.now()}-client-slash-commands-list-error`,
+            timestamp: Date.now(),
+            source: "error",
+            label: "slash_commands/list error",
+            payload: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
+    };
+
+    refreshSlashCommands();
+    const intervalId = window.setInterval(refreshSlashCommands, 15_000);
+    const onFocus = () => {
+      refreshSlashCommands();
+    };
+    window.addEventListener("focus", onFocus);
+
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
     };
-  }, [activeWorkspace, onDebug]);
+  }, [activeWorkspace?.connected, activeWorkspace?.id, onDebug]);
 
   const sendMessageToThread = useCallback(
     async (
