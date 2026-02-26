@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import type { WorkspaceInfo } from "../../../types";
 
+const RESTORE_RETRY_DELAY_MS = 1500;
+const MAX_RESTORE_RETRIES = 5;
+
 type WorkspaceRestoreOptions = {
   workspaces: WorkspaceInfo[];
   hasLoaded: boolean;
@@ -18,26 +21,120 @@ export function useWorkspaceRestore({
   listThreadsForWorkspace,
 }: WorkspaceRestoreOptions) {
   const restoredWorkspaces = useRef(new Set<string>());
+  const restoringWorkspaces = useRef(new Set<string>());
+  const retryCountByWorkspace = useRef(new Map<string, number>());
+  const retryTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const optionsRef = useRef({
+    workspaces,
+    hasLoaded,
+    connectWorkspace,
+    listThreadsForWorkspace,
+  });
+
+  useEffect(() => {
+    optionsRef.current = {
+      workspaces,
+      hasLoaded,
+      connectWorkspace,
+      listThreadsForWorkspace,
+    };
+  });
+
+  useEffect(
+    () => () => {
+      retryTimers.current.forEach((timer) => {
+        clearTimeout(timer);
+      });
+      retryTimers.current.clear();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!hasLoaded) {
       return;
     }
-    workspaces.forEach((workspace) => {
-      if (restoredWorkspaces.current.has(workspace.id)) {
+
+    const activeWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+    restoredWorkspaces.current.forEach((workspaceId) => {
+      if (!activeWorkspaceIds.has(workspaceId)) {
+        restoredWorkspaces.current.delete(workspaceId);
+      }
+    });
+    restoringWorkspaces.current.forEach((workspaceId) => {
+      if (!activeWorkspaceIds.has(workspaceId)) {
+        restoringWorkspaces.current.delete(workspaceId);
+      }
+    });
+    retryCountByWorkspace.current.forEach((_count, workspaceId) => {
+      if (!activeWorkspaceIds.has(workspaceId)) {
+        retryCountByWorkspace.current.delete(workspaceId);
+      }
+    });
+    retryTimers.current.forEach((timer, workspaceId) => {
+      if (activeWorkspaceIds.has(workspaceId)) {
         return;
       }
-      restoredWorkspaces.current.add(workspace.id);
+      clearTimeout(timer);
+      retryTimers.current.delete(workspaceId);
+    });
+
+    const restoreWorkspace = (workspaceId: string) => {
+      const {
+        workspaces: latestWorkspaces,
+        hasLoaded: latestHasLoaded,
+        connectWorkspace: latestConnectWorkspace,
+        listThreadsForWorkspace: latestListThreadsForWorkspace,
+      } = optionsRef.current;
+      if (!latestHasLoaded) {
+        return;
+      }
+      const workspace = latestWorkspaces.find((entry) => entry.id === workspaceId);
+      if (!workspace) {
+        return;
+      }
+      if (restoredWorkspaces.current.has(workspaceId)) {
+        return;
+      }
+      if (restoringWorkspaces.current.has(workspaceId)) {
+        return;
+      }
+
+      restoringWorkspaces.current.add(workspaceId);
       void (async () => {
         try {
           if (!workspace.connected) {
-            await connectWorkspace(workspace);
+            await latestConnectWorkspace(workspace);
           }
-          await listThreadsForWorkspace(workspace);
+          await latestListThreadsForWorkspace(workspace);
+          restoredWorkspaces.current.add(workspaceId);
+          retryCountByWorkspace.current.delete(workspaceId);
+          const retryTimer = retryTimers.current.get(workspaceId);
+          if (retryTimer) {
+            clearTimeout(retryTimer);
+            retryTimers.current.delete(workspaceId);
+          }
         } catch {
-          // Silent: connection errors show in debug panel.
+          const attempts = retryCountByWorkspace.current.get(workspaceId) ?? 0;
+          if (attempts >= MAX_RESTORE_RETRIES) {
+            return;
+          }
+          retryCountByWorkspace.current.set(workspaceId, attempts + 1);
+          if (!retryTimers.current.has(workspaceId)) {
+            const timer = setTimeout(() => {
+              retryTimers.current.delete(workspaceId);
+              restoreWorkspace(workspaceId);
+            }, RESTORE_RETRY_DELAY_MS);
+            retryTimers.current.set(workspaceId, timer);
+          }
+        } finally {
+          restoringWorkspaces.current.delete(workspaceId);
         }
       })();
+    };
+
+    workspaces.forEach((workspace) => {
+      restoreWorkspace(workspace.id);
     });
   }, [connectWorkspace, hasLoaded, listThreadsForWorkspace, workspaces]);
 }
