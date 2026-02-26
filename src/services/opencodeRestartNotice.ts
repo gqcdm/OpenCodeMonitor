@@ -9,6 +9,11 @@ export type OpenCodeRestartNotice = {
   source: "manual" | "detector" | null;
 };
 
+function normalizeReason(reason?: string | null) {
+  const trimmed = reason?.trim();
+  return trimmed ? trimmed : null;
+}
+
 const DEFAULT_NOTICE: OpenCodeRestartNotice = {
   required: false,
   updatedAt: null,
@@ -56,10 +61,20 @@ export function markOpenCodeRestartRequired(
   if (!canUseBrowserStorage()) {
     return;
   }
+  const normalizedReason = normalizeReason(reason);
+  const current = readOpenCodeRestartNotice();
+  if (
+    current.required &&
+    current.reason === normalizedReason &&
+    current.source === source
+  ) {
+    return;
+  }
+
   const next: OpenCodeRestartNotice = {
     required: true,
     updatedAt: Date.now(),
-    reason: reason?.trim() ? reason.trim() : null,
+    reason: normalizedReason,
     source,
   };
   try {

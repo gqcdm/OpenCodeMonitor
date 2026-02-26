@@ -154,7 +154,49 @@ fn parse_pid_started_at(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
-async fn latest_change_under_dir(root: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
+fn should_ignore_restart_mtime_entry(name: &str, is_dir: bool) -> bool {
+    if matches!(name, ".DS_Store" | ".tmp" | ".Trash") {
+        return true;
+    }
+
+    if matches!(name, ".git" | ".idea" | ".vscode") {
+        return true;
+    }
+
+    if !is_dir
+        && (name.ends_with('~')
+            || name.ends_with(".swp")
+            || name.ends_with(".swo")
+            || name.ends_with(".swx")
+            || name.ends_with(".tmp")
+            || name.ends_with(".temp")
+            || name.ends_with(".bak")
+            || name.starts_with(".#")
+            || (name.starts_with('#') && name.ends_with('#')))
+    {
+        return true;
+    }
+
+    false
+}
+
+#[derive(Clone)]
+struct TrackedConfigChange {
+    changed_at: chrono::DateTime<chrono::Utc>,
+    path: PathBuf,
+}
+
+fn newer_tracked_change(
+    current: Option<TrackedConfigChange>,
+    candidate: TrackedConfigChange,
+) -> Option<TrackedConfigChange> {
+    match current {
+        Some(existing) if existing.changed_at >= candidate.changed_at => Some(existing),
+        _ => Some(candidate),
+    }
+}
+
+async fn latest_change_under_dir(root: &Path) -> Option<TrackedConfigChange> {
     let mut latest = None;
     let mut stack = vec![root.to_path_buf()];
 
@@ -165,17 +207,25 @@ async fn latest_change_under_dir(root: &Path) -> Option<chrono::DateTime<chrono:
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
             let metadata = match entry.metadata().await {
                 Ok(metadata) => metadata,
                 Err(_) => continue,
             };
 
+            if should_ignore_restart_mtime_entry(&file_name, metadata.is_dir()) {
+                continue;
+            }
+
             if let Ok(modified) = metadata.modified() {
-                let modified_at = chrono::DateTime::<chrono::Utc>::from(modified);
-                latest = Some(match latest {
-                    Some(current) if current >= modified_at => current,
-                    _ => modified_at,
-                });
+                latest = newer_tracked_change(
+                    latest,
+                    TrackedConfigChange {
+                        changed_at: chrono::DateTime::<chrono::Utc>::from(modified),
+                        path: entry.path(),
+                    },
+                );
             }
 
             if metadata.is_dir() {
@@ -189,7 +239,7 @@ async fn latest_change_under_dir(root: &Path) -> Option<chrono::DateTime<chrono:
 
 async fn latest_change_in_tracked_config_paths(
     config_root: &Path,
-) -> Option<chrono::DateTime<chrono::Utc>> {
+) -> Option<TrackedConfigChange> {
     let tracked_paths = [
         config_root.join("opencode.jsonc"),
         config_root.join("command"),
@@ -206,19 +256,18 @@ async fn latest_change_in_tracked_config_paths(
         };
 
         if let Ok(modified) = metadata.modified() {
-            let modified_at = chrono::DateTime::<chrono::Utc>::from(modified);
-            latest = Some(match latest {
-                Some(current) if current >= modified_at => current,
-                _ => modified_at,
-            });
+            latest = newer_tracked_change(
+                latest,
+                TrackedConfigChange {
+                    changed_at: chrono::DateTime::<chrono::Utc>::from(modified),
+                    path: tracked_path.clone(),
+                },
+            );
         }
 
         if metadata.is_dir() {
             if let Some(dir_latest) = latest_change_under_dir(&tracked_path).await {
-                latest = Some(match latest {
-                    Some(current) if current >= dir_latest => current,
-                    _ => dir_latest,
-                });
+                latest = newer_tracked_change(latest, dir_latest);
             }
         }
     }
@@ -278,23 +327,41 @@ pub(crate) async fn opencode_restart_required_status() -> Value {
 
     let latest_change = latest_change_in_tracked_config_paths(&config_root).await;
     let required = latest_change
-        .map(|changed_at| changed_at > server_started_at)
+        .as_ref()
+        .map(|change| change.changed_at > server_started_at)
         .unwrap_or(false);
 
-    json!({
+    let mut response = json!({
         "required": required,
         "detected": true,
         "managed": true,
         "healthy": true,
         "configPath": config_root,
         "serverStartedAt": server_started_at.to_rfc3339(),
-        "latestConfigChangeAt": latest_change.map(|dt| dt.to_rfc3339()),
+        "latestConfigChangeAt": latest_change
+            .as_ref()
+            .map(|change| change.changed_at.to_rfc3339()),
         "reason": if required {
             Some("OpenCode config changed since server start")
         } else {
             None::<&str>
         }
-    })
+    });
+
+    #[cfg(debug_assertions)]
+    if let Some(obj) = response.as_object_mut() {
+        obj.insert(
+            "debug".to_string(),
+            json!({
+                "latestConfigChangePath": latest_change
+                    .as_ref()
+                    .map(|change| change.path.display().to_string()),
+                "restartRequiredComputation": "latestConfigChangeAt > serverStartedAt"
+            }),
+        );
+    }
+
+    response
 }
 
 /// Kill process listening on the REST port (for takeover functionality).

@@ -11,9 +11,13 @@ import {
   markOpenCodeRestartRequired,
   notifyOpenCodeServerRestarted,
   readOpenCodeRestartNotice,
+  subscribeOpenCodeServerRestarted,
   subscribeOpenCodeRestartNotice,
 } from "@services/opencodeRestartNotice";
 import { useDismissibleMenu } from "../hooks/useDismissibleMenu";
+
+const RESTART_CHECK_FOCUS_THROTTLE_MS = 3_000;
+const RESTART_CHECK_POST_RESTART_COOLDOWN_MS = 10_000;
 
 type SidebarCornerActionsProps = {
   onOpenSettings: () => void;
@@ -46,6 +50,9 @@ export function SidebarCornerActions({
   const [restartNotice, setRestartNotice] = useState(readOpenCodeRestartNotice);
   const [restartingServer, setRestartingServer] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const restartCheckInFlightRef = useRef(false);
+  const restartCheckLastAtRef = useRef(0);
+  const restartCheckCooldownUntilRef = useRef(0);
 
   useDismissibleMenu({
     isOpen: accountMenuOpen,
@@ -64,7 +71,21 @@ export function SidebarCornerActions({
   useEffect(() => {
     let cancelled = false;
 
-    const checkRestartRequirement = async () => {
+    const checkRestartRequirement = async (force = false) => {
+      const now = Date.now();
+      if (!force) {
+        if (restartCheckInFlightRef.current) {
+          return;
+        }
+        if (now < restartCheckCooldownUntilRef.current) {
+          return;
+        }
+        if (now - restartCheckLastAtRef.current < RESTART_CHECK_FOCUS_THROTTLE_MS) {
+          return;
+        }
+      }
+
+      restartCheckInFlightRef.current = true;
       try {
         const status = await getOpenCodeRestartRequiredStatus();
         if (cancelled || !status.detected) {
@@ -75,17 +96,26 @@ export function SidebarCornerActions({
         }
       } catch {
         // No-op: banner is best-effort and should not break sidebar interactions.
+      } finally {
+        restartCheckInFlightRef.current = false;
+        restartCheckLastAtRef.current = Date.now();
       }
     };
 
-    void checkRestartRequirement();
+    void checkRestartRequirement(true);
     const onFocus = () => {
       void checkRestartRequirement();
     };
+    const unsubscribeRestarted = subscribeOpenCodeServerRestarted(() => {
+      restartCheckCooldownUntilRef.current =
+        Date.now() + RESTART_CHECK_POST_RESTART_COOLDOWN_MS;
+      restartCheckLastAtRef.current = Date.now();
+    });
     window.addEventListener("focus", onFocus);
 
     return () => {
       cancelled = true;
+      unsubscribeRestarted();
       window.removeEventListener("focus", onFocus);
     };
   }, []);
