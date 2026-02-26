@@ -71,9 +71,7 @@ export function SidebarCornerActions({
           return;
         }
         if (status.required) {
-          markOpenCodeRestartRequired(status.reason ?? "OpenCode config changed.");
-        } else {
-          clearOpenCodeRestartRequired();
+          markOpenCodeRestartRequired(status.reason ?? "OpenCode config changed.", "detector");
         }
       } catch {
         // No-op: banner is best-effort and should not break sidebar interactions.
@@ -106,25 +104,13 @@ export function SidebarCornerActions({
     }
   };
 
-  const restartTooltip = restartNotice.reason
-    ? `OpenCode config changes are pending. ${restartNotice.reason} Restart the OpenCode server to apply updated agents and models.`
-    : "OpenCode config changes are pending. Restart the OpenCode server to apply updated agents and models.";
+  const reasonText = restartNotice.reason?.trim().replace(/[.\s]+$/, "") ?? "";
+  const restartTooltip = reasonText
+    ? `${reasonText}. Restart OpenCode to refresh agents and models.`
+    : "Config changed. Restart OpenCode to refresh agents and models.";
 
   return (
     <div className="sidebar-corner-actions">
-      {restartNotice.required && (
-        <button
-          type="button"
-          className={`sidebar-restart-banner${restartingServer ? " is-restarting" : ""}`}
-          onClick={() => void handleRestartServer()}
-          disabled={restartingServer}
-          aria-label="Restart OpenCode server to apply config changes"
-          title={restartTooltip}
-        >
-          <RotateCcw size={12} aria-hidden />
-          <span>{restartingServer ? "Restarting..." : "Restart OpenCode"}</span>
-        </button>
-      )}
       <div className="sidebar-corner-actions-row">
         <button
           className="ghost sidebar-corner-button"
@@ -135,6 +121,29 @@ export function SidebarCornerActions({
         >
           <Settings size={14} aria-hidden />
         </button>
+        {restartNotice.required && (
+          <div className="sidebar-restart-banner-wrap">
+            <button
+              type="button"
+              className={`sidebar-restart-banner${restartingServer ? " is-restarting" : ""}`}
+              onClick={() => void handleRestartServer()}
+              disabled={restartingServer}
+              aria-label="Restart OpenCode server to apply config changes"
+              aria-describedby="sidebar-restart-tooltip"
+            >
+              <RotateCcw size={12} aria-hidden />
+              <span>{restartingServer ? "Restarting..." : "Config changed"}</span>
+            </button>
+            <div
+              id="sidebar-restart-tooltip"
+              role="tooltip"
+              className="sidebar-restart-tooltip"
+            >
+              <strong>Restart required</strong>
+              <span>{restartTooltip}</span>
+            </div>
+          </div>
+        )}
         {showDebugButton && (
           <button
             className="ghost sidebar-corner-button"

@@ -247,7 +247,7 @@ pub(crate) async fn opencode_restart_required_status() -> Value {
         "serverStartedAt": server_started_at.to_rfc3339(),
         "latestConfigChangeAt": latest_change.map(|dt| dt.to_rfc3339()),
         "reason": if required {
-            Some("OpenCode config changed after the managed server started")
+            Some("Config changed since server start")
         } else {
             None::<&str>
         }

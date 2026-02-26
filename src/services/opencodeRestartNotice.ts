@@ -6,12 +6,14 @@ export type OpenCodeRestartNotice = {
   required: boolean;
   updatedAt: number | null;
   reason: string | null;
+  source: "manual" | "detector" | null;
 };
 
 const DEFAULT_NOTICE: OpenCodeRestartNotice = {
   required: false,
   updatedAt: null,
   reason: null,
+  source: null,
 };
 
 function canUseBrowserStorage() {
@@ -39,13 +41,18 @@ export function readOpenCodeRestartNotice(): OpenCodeRestartNotice {
       required: parsed.required === true,
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : null,
       reason: typeof parsed.reason === "string" ? parsed.reason : null,
+      source:
+        parsed.source === "manual" || parsed.source === "detector" ? parsed.source : null,
     };
   } catch {
     return DEFAULT_NOTICE;
   }
 }
 
-export function markOpenCodeRestartRequired(reason?: string | null) {
+export function markOpenCodeRestartRequired(
+  reason?: string | null,
+  source: "manual" | "detector" = "manual",
+) {
   if (!canUseBrowserStorage()) {
     return;
   }
@@ -53,6 +60,7 @@ export function markOpenCodeRestartRequired(reason?: string | null) {
     required: true,
     updatedAt: Date.now(),
     reason: reason?.trim() ? reason.trim() : null,
+    source,
   };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
