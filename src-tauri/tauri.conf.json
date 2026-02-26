@@ -38,7 +38,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -51,5 +51,12 @@
       "infoPlist": "./Info.plist"
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "RWSrR129PnCsoT2HtWNshDyqL0WK2KrXhN9jo78M5eOQyuU3oZSBr6OJ",
+      "endpoints": [
+        "https://github.com/jacobjmc/OpenCodeMonitor/releases/latest/download/latest.json"
+      ]
+    }
+  }
 }

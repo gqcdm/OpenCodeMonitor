@@ -81,13 +81,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.tauri"
-          echo "$TAURI_SIGNING_PRIVATE_KEY_B64" | base64 --decode > "$HOME/.tauri/codexmonitor.key"
+          echo "$TAURI_SIGNING_PRIVATE_KEY_B64" | base64 --decode > "$HOME/.tauri/opencodemonitor.key"
 
       - name: Build app bundle
         run: |
           set -euo pipefail
           export TAURI_SIGNING_PRIVATE_KEY
-          TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/codexmonitor.key")"
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/opencodemonitor.key")"
           npm run tauri -- build --bundles app
 
       - name: Bundle OpenSSL and re-sign
@@ -100,15 +100,15 @@ jobs:
         run: |
           set -euo pipefail
           ditto -c -k --keepParent \
-            "src-tauri/target/release/bundle/macos/Codex Monitor.app" \
-            CodexMonitor.zip
+            "src-tauri/target/release/bundle/macos/OpenCode Monitor.app" \
+            OpenCodeMonitor.zip
 
-          xcrun notarytool submit CodexMonitor.zip \
+          xcrun notarytool submit OpenCodeMonitor.zip \
             --keychain-profile "$NOTARY_PROFILE_NAME" \
             --wait
 
           xcrun stapler staple \
-            "src-tauri/target/release/bundle/macos/Codex Monitor.app"
+            "src-tauri/target/release/bundle/macos/OpenCode Monitor.app"
 
       - name: Package artifacts
         run: |
@@ -123,42 +123,42 @@ jobs:
           )
 
           mkdir -p release-artifacts release-artifacts/dmg-root
-          rm -rf "release-artifacts/dmg-root/Codex Monitor.app"
-          ditto "src-tauri/target/release/bundle/macos/Codex Monitor.app" \
-            "release-artifacts/dmg-root/Codex Monitor.app"
+          rm -rf "release-artifacts/dmg-root/OpenCode Monitor.app"
+          ditto "src-tauri/target/release/bundle/macos/OpenCode Monitor.app" \
+            "release-artifacts/dmg-root/OpenCode Monitor.app"
 
           ditto -c -k --keepParent \
-            "src-tauri/target/release/bundle/macos/Codex Monitor.app" \
-            release-artifacts/CodexMonitor.zip
+            "src-tauri/target/release/bundle/macos/OpenCode Monitor.app" \
+            release-artifacts/OpenCodeMonitor.zip
 
-          hdiutil create -volname "Codex Monitor" \
+          hdiutil create -volname "OpenCode Monitor" \
             -srcfolder release-artifacts/dmg-root \
             -ov -format UDZO \
-            release-artifacts/CodexMonitor_${VERSION}_aarch64.dmg
+            release-artifacts/OpenCodeMonitor_${VERSION}_aarch64.dmg
 
           COPYFILE_DISABLE=1 tar -czf \
-            "src-tauri/target/release/bundle/macos/Codex Monitor.app.tar.gz" \
-            -C src-tauri/target/release/bundle/macos "Codex Monitor.app"
+            "src-tauri/target/release/bundle/macos/OpenCode Monitor.app.tar.gz" \
+            -C src-tauri/target/release/bundle/macos "OpenCode Monitor.app"
 
           npm run tauri signer sign -- \
-            -f "$HOME/.tauri/codexmonitor.key" \
+            -f "$HOME/.tauri/opencodemonitor.key" \
             -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-            "src-tauri/target/release/bundle/macos/Codex Monitor.app.tar.gz"
+            "src-tauri/target/release/bundle/macos/OpenCode Monitor.app.tar.gz"
 
-          cp "src-tauri/target/release/bundle/macos/Codex Monitor.app.tar.gz" \
-            release-artifacts/CodexMonitor.app.tar.gz
-          cp "src-tauri/target/release/bundle/macos/Codex Monitor.app.tar.gz.sig" \
-            release-artifacts/CodexMonitor.app.tar.gz.sig
+          cp "src-tauri/target/release/bundle/macos/OpenCode Monitor.app.tar.gz" \
+            release-artifacts/OpenCodeMonitor.app.tar.gz
+          cp "src-tauri/target/release/bundle/macos/OpenCode Monitor.app.tar.gz.sig" \
+            release-artifacts/OpenCodeMonitor.app.tar.gz.sig
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts
           path: |
-            release-artifacts/CodexMonitor.zip
-            release-artifacts/CodexMonitor_*_aarch64.dmg
-            release-artifacts/CodexMonitor.app.tar.gz
-            release-artifacts/CodexMonitor.app.tar.gz.sig
+            release-artifacts/OpenCodeMonitor.zip
+            release-artifacts/OpenCodeMonitor_*_aarch64.dmg
+            release-artifacts/OpenCodeMonitor.app.tar.gz
+            release-artifacts/OpenCodeMonitor.app.tar.gz.sig
 
   build_linux:
     name: linux bundles (${{ matrix.arch }})
@@ -204,13 +204,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.tauri"
-          echo "$TAURI_SIGNING_PRIVATE_KEY_B64" | base64 --decode > "$HOME/.tauri/codexmonitor.key"
+          echo "$TAURI_SIGNING_PRIVATE_KEY_B64" | base64 --decode > "$HOME/.tauri/opencodemonitor.key"
 
       - name: build AppImage and RPM
         run: |
           set -euo pipefail
           export TAURI_SIGNING_PRIVATE_KEY
-          TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/codexmonitor.key")"
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/opencodemonitor.key")"
           npm run tauri -- build --bundles appimage,rpm
 
       - name: Validate Linux bundle outputs
@@ -282,7 +282,7 @@ jobs:
           home = Path.home()
           target = home / ".tauri"
           target.mkdir(parents=True, exist_ok=True)
-          (target / "codexmonitor.key").write_bytes(raw)
+          (target / "opencodemonitor.key").write_bytes(raw)
           PY
 
       - name: build windows bundles
@@ -290,7 +290,7 @@ jobs:
         run: |
           set -euo pipefail
           export TAURI_SIGNING_PRIVATE_KEY
-          TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/codexmonitor.key")"
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/opencodemonitor.key")"
           npm run tauri:build:win
 
       - name: Upload Windows artifacts
@@ -380,7 +380,7 @@ jobs:
           PY
           )
 
-          SIGNATURE=$(cat release-artifacts/CodexMonitor.app.tar.gz.sig)
+          SIGNATURE=$(cat release-artifacts/OpenCodeMonitor.app.tar.gz.sig)
           LAST_TAG=$(git tag --sort=-version:refname \
             | grep -v "^v${VERSION}$" \
             | head -n 1 || true)
@@ -438,11 +438,11 @@ jobs:
           artifacts_dir = Path("release-artifacts")
 
           def release_url(filename):
-            return f"https://github.com/Dimillian/CodexMonitor/releases/download/v${VERSION}/{quote(filename)}"
+            return f"https://github.com/jacobjmc/OpenCodeMonitor/releases/download/v${VERSION}/{quote(filename)}"
 
           platforms = {
             "darwin-aarch64": {
-              "url": release_url("CodexMonitor.app.tar.gz"),
+              "url": release_url("OpenCodeMonitor.app.tar.gz"),
               "signature": "${SIGNATURE}",
             }
           }
@@ -478,7 +478,7 @@ jobs:
           preferred_installers = []
           for candidate in exe_candidates:
             lowered = candidate.name.lower()
-            if "codexmonitor" in lowered and ("setup" in lowered or "installer" in lowered):
+            if "opencodemonitor" in lowered and ("setup" in lowered or "installer" in lowered):
               preferred_installers.append(candidate)
           if preferred_installers:
             windows_installer = preferred_installers[0]
@@ -582,10 +582,10 @@ jobs:
             --title "v${VERSION}" \
             --notes-file release-artifacts/release-notes.md \
             --target "$GITHUB_SHA" \
-            release-artifacts/CodexMonitor.zip \
-            release-artifacts/CodexMonitor_*_aarch64.dmg \
-            release-artifacts/CodexMonitor.app.tar.gz \
-            release-artifacts/CodexMonitor.app.tar.gz.sig \
+            release-artifacts/OpenCodeMonitor.zip \
+            release-artifacts/OpenCodeMonitor_*_aarch64.dmg \
+            release-artifacts/OpenCodeMonitor.app.tar.gz \
+            release-artifacts/OpenCodeMonitor.app.tar.gz.sig \
             "${appimages[@]}" \
             "${rpms[@]}" \
             "${windows_exes[@]}" \

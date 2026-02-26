@@ -191,7 +191,8 @@ pub fn run() {
                     let _ = window::configure_ios_webview_edge_to_edge(&main_webview);
                 }
             }
-            // Updater plugin removed — OpenCodeMonitor ships without auto-update for now.
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             Ok(())
         });
 
