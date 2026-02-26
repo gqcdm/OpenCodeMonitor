@@ -489,6 +489,8 @@ describe("useThreads UX integration", () => {
         startReview: threads.startReview,
         startResume: threads.startResume,
         startCompact: threads.startCompact,
+        startUndo: threads.startUndo,
+        startRedo: threads.startRedo,
         startApps: threads.startApps,
         startMcp: threads.startMcp,
         startStatus: threads.startStatus,

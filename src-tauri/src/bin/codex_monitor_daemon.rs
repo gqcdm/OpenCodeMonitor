@@ -698,6 +698,22 @@ impl DaemonState {
         codex_core::compact_thread_core(&self.sessions, workspace_id, thread_id, model).await
     }
 
+    async fn undo_last_turn(
+        &self,
+        workspace_id: String,
+        thread_id: String,
+    ) -> Result<Value, String> {
+        codex_core::undo_last_turn_core(&self.sessions, workspace_id, thread_id).await
+    }
+
+    async fn redo_last_turn(
+        &self,
+        workspace_id: String,
+        thread_id: String,
+    ) -> Result<Value, String> {
+        codex_core::redo_last_turn_core(&self.sessions, workspace_id, thread_id).await
+    }
+
     async fn execute_slash_command(
         &self,
         workspace_id: String,

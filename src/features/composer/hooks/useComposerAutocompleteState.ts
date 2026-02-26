@@ -69,6 +69,20 @@ function getLocalSlashCommandItems(appsEnabled: boolean): AutocompleteItem[] {
       group: "Slash",
     },
     {
+      id: "local:undo",
+      label: "undo",
+      description: "undo the last turn",
+      insertText: "undo",
+      group: "Slash",
+    },
+    {
+      id: "local:redo",
+      label: "redo",
+      description: "restore the last undone turn",
+      insertText: "redo",
+      group: "Slash",
+    },
+    {
       id: "local:review",
       label: "review",
       description: "start a code review",

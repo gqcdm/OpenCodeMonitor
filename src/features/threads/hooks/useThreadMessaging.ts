@@ -14,6 +14,7 @@ import type {
 } from "@/types";
 import {
   compactThread as compactThreadService,
+  redoLastTurn as redoLastTurnService,
   executeSlashCommand as executeSlashCommandService,
   sendUserMessage as sendUserMessageService,
   steerTurn as steerTurnService,
@@ -22,6 +23,7 @@ import {
   getAppsList as getAppsListService,
   listSlashCommands as listSlashCommandsService,
   listMcpServerStatus as listMcpServerStatusService,
+  undoLastTurn as undoLastTurnService,
 } from "@services/tauri";
 import { expandCustomPromptText } from "@utils/customPrompts";
 import {
@@ -1084,6 +1086,76 @@ export function useThreadMessaging({
     ],
   );
 
+  const startUndo = useCallback(
+    async (_text: string) => {
+      if (!activeWorkspace) {
+        return;
+      }
+      if (activeThreadId && threadStatusById[activeThreadId]?.isProcessing) {
+        return;
+      }
+      const threadId = activeThreadId ?? (await ensureThreadForActiveWorkspace());
+      if (!threadId) {
+        return;
+      }
+      try {
+        await undoLastTurnService(activeWorkspace.id, threadId);
+        await refreshThread(activeWorkspace.id, threadId);
+      } catch (error) {
+        pushThreadErrorMessage(
+          threadId,
+          error instanceof Error ? error.message : "Failed to undo the last turn.",
+        );
+      } finally {
+        safeMessageActivity();
+      }
+    },
+    [
+      activeThreadId,
+      activeWorkspace,
+      ensureThreadForActiveWorkspace,
+      pushThreadErrorMessage,
+      refreshThread,
+      safeMessageActivity,
+      threadStatusById,
+    ],
+  );
+
+  const startRedo = useCallback(
+    async (_text: string) => {
+      if (!activeWorkspace) {
+        return;
+      }
+      if (activeThreadId && threadStatusById[activeThreadId]?.isProcessing) {
+        return;
+      }
+      const threadId = activeThreadId ?? (await ensureThreadForActiveWorkspace());
+      if (!threadId) {
+        return;
+      }
+      try {
+        await redoLastTurnService(activeWorkspace.id, threadId);
+        await refreshThread(activeWorkspace.id, threadId);
+      } catch (error) {
+        pushThreadErrorMessage(
+          threadId,
+          error instanceof Error ? error.message : "Failed to redo the last undone turn.",
+        );
+      } finally {
+        safeMessageActivity();
+      }
+    },
+    [
+      activeThreadId,
+      activeWorkspace,
+      ensureThreadForActiveWorkspace,
+      pushThreadErrorMessage,
+      refreshThread,
+      safeMessageActivity,
+      threadStatusById,
+    ],
+  );
+
   const executeSlashCommand = useCallback(
     async (text: string) => {
       if (!activeWorkspace) {
@@ -1142,6 +1214,8 @@ export function useThreadMessaging({
     startReview,
     startResume,
     startCompact,
+    startUndo,
+    startRedo,
     startApps,
     startMcp,
     startStatus,

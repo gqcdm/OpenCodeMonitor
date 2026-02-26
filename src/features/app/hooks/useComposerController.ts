@@ -25,6 +25,8 @@ export function useComposerController({
   startReview,
   startResume,
   startCompact,
+  startUndo,
+  startRedo,
   startApps,
   startMcp,
   startStatus,
@@ -59,6 +61,8 @@ export function useComposerController({
   startReview: (text: string) => Promise<void>;
   startResume: (text: string) => Promise<void>;
   startCompact: (text: string) => Promise<void>;
+  startUndo: (text: string) => Promise<void>;
+  startRedo: (text: string) => Promise<void>;
   startApps: (text: string) => Promise<void>;
   startMcp: (text: string) => Promise<void>;
   startStatus: (text: string) => Promise<void>;
@@ -104,6 +108,8 @@ export function useComposerController({
     startReview,
     startResume,
     startCompact,
+    startUndo,
+    startRedo,
     startApps,
     startMcp,
     startStatus,

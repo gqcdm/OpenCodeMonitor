@@ -36,6 +36,8 @@ type UseQueuedSendOptions = {
   startReview: (text: string) => Promise<void>;
   startResume: (text: string) => Promise<void>;
   startCompact: (text: string) => Promise<void>;
+  startUndo: (text: string) => Promise<void>;
+  startRedo: (text: string) => Promise<void>;
   startApps: (text: string) => Promise<void>;
   startMcp: (text: string) => Promise<void>;
   startStatus: (text: string) => Promise<void>;
@@ -68,9 +70,11 @@ type SlashCommandKind =
   | "fork"
   | "mcp"
   | "new"
+  | "redo"
   | "resume"
   | "review"
-  | "status";
+  | "status"
+  | "undo";
 
 type ParsedSlashCommand =
   | { kind: "local"; command: SlashCommandKind }
@@ -94,6 +98,12 @@ function parseLocalSlashCommand(text: string, appsEnabled: boolean): SlashComman
   }
   if (/^\/new\b/i.test(text)) {
     return "new";
+  }
+  if (/^\/undo\b/i.test(text)) {
+    return "undo";
+  }
+  if (/^\/redo\b/i.test(text)) {
+    return "redo";
   }
   if (/^\/resume\b/i.test(text)) {
     return "resume";
@@ -159,6 +169,8 @@ export function useQueuedSend({
   startReview,
   startResume,
   startCompact,
+  startUndo,
+  startRedo,
   startApps,
   startMcp,
   startStatus,
@@ -229,6 +241,14 @@ export function useQueuedSend({
         await startCompact(trimmed);
         return;
       }
+      if (command.command === "undo") {
+        await startUndo(trimmed);
+        return;
+      }
+      if (command.command === "redo") {
+        await startRedo(trimmed);
+        return;
+      }
       if (command.command === "apps") {
         await startApps(trimmed);
         return;
@@ -256,6 +276,8 @@ export function useQueuedSend({
       startReview,
       startResume,
       startCompact,
+      startUndo,
+      startRedo,
       startApps,
       startMcp,
       startStatus,

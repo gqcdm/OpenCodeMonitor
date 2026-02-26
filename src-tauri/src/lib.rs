@@ -246,6 +246,8 @@ pub fn run() {
             codex::list_slash_commands,
             codex::archive_thread,
             codex::compact_thread,
+            codex::undo_last_turn,
+            codex::redo_last_turn,
             codex::execute_slash_command,
             codex::set_thread_name,
             codex::collaboration_mode_list,

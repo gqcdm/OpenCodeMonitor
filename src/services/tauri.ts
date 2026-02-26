@@ -954,6 +954,14 @@ export async function archiveThread(workspaceId: string, threadId: string) {
   return invoke<any>("archive_thread", { workspaceId, threadId });
 }
 
+export async function undoLastTurn(workspaceId: string, threadId: string) {
+  return invoke<any>("undo_last_turn", { workspaceId, threadId });
+}
+
+export async function redoLastTurn(workspaceId: string, threadId: string) {
+  return invoke<any>("redo_last_turn", { workspaceId, threadId });
+}
+
 export async function setThreadName(
   workspaceId: string,
   threadId: string,

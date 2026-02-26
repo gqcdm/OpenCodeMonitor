@@ -112,12 +112,13 @@ describe("useComposerAutocompleteState slash commands", () => {
     );
 
     const labels = result.current.autocompleteMatches.map((item) => item.label);
-    expect(labels.slice(0, 8)).toEqual([
+    expect(labels.slice(0, 9)).toEqual([
       "apps",
       "compact",
       "fork",
       "mcp",
       "new",
+      "redo",
       "resume",
       "review",
       "status",
@@ -158,9 +159,11 @@ describe("useComposerAutocompleteState slash commands", () => {
       "fork",
       "mcp",
       "new",
+      "redo",
       "resume",
       "review",
       "status",
+      "undo",
     ]);
   });
 });

@@ -106,6 +106,28 @@ pub(super) async fn try_handle(
             let model = parse_optional_string(params, "model");
             Some(state.compact_thread(workspace_id, thread_id, model).await)
         }
+        "undo_last_turn" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let thread_id = match parse_string(params, "threadId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            Some(state.undo_last_turn(workspace_id, thread_id).await)
+        }
+        "redo_last_turn" => {
+            let workspace_id = match parse_string(params, "workspaceId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let thread_id = match parse_string(params, "threadId") {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            Some(state.redo_last_turn(workspace_id, thread_id).await)
+        }
         "execute_slash_command" => {
             let workspace_id = match parse_string(params, "workspaceId") {
                 Ok(value) => value,

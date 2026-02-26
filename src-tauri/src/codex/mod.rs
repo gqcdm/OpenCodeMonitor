@@ -239,6 +239,46 @@ pub(crate) async fn compact_thread(
 }
 
 #[tauri::command]
+pub(crate) async fn undo_last_turn(
+    workspace_id: String,
+    thread_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "undo_last_turn",
+            json!({ "workspaceId": workspace_id, "threadId": thread_id }),
+        )
+        .await;
+    }
+
+    codex_core::undo_last_turn_core(&state.sessions, workspace_id, thread_id).await
+}
+
+#[tauri::command]
+pub(crate) async fn redo_last_turn(
+    workspace_id: String,
+    thread_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    if remote_backend::is_remote_mode(&*state).await {
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "redo_last_turn",
+            json!({ "workspaceId": workspace_id, "threadId": thread_id }),
+        )
+        .await;
+    }
+
+    codex_core::redo_last_turn_core(&state.sessions, workspace_id, thread_id).await
+}
+
+#[tauri::command]
 pub(crate) async fn execute_slash_command(
     workspace_id: String,
     thread_id: String,

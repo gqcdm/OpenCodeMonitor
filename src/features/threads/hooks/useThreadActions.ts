@@ -181,6 +181,11 @@ export function useThreadActions({
       if (inFlightCount === 1) {
         dispatch({ type: "setThreadResumeLoading", threadId, isLoading: true });
       }
+      const shouldReplaceRequested =
+        replaceLocal || replaceOnResumeRef.current[threadId] === true;
+      if (shouldReplaceRequested) {
+        dispatch({ type: "setThreadItems", threadId, items: [] });
+      }
       try {
         const response =
           (await resumeThreadService(workspaceId, threadId)) as
@@ -248,8 +253,12 @@ export function useThreadActions({
                 : localItems.length > 0 && !hasOverlap
                   ? localItems
                   : mergeThreadItems(items, localItems)
-              : localItems;
+              : shouldReplace
+                ? []
+                : localItems;
           if (mergedItems.length > 0) {
+            dispatch({ type: "setThreadItems", threadId, items: mergedItems });
+          } else if (shouldReplace && items.length > 0) {
             dispatch({ type: "setThreadItems", threadId, items: mergedItems });
           }
           const preview = asString(thread?.preview ?? "");

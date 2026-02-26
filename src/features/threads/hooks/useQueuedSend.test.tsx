@@ -30,6 +30,8 @@ const makeOptions = (
   startReview: vi.fn().mockResolvedValue(undefined),
   startResume: vi.fn().mockResolvedValue(undefined),
   startCompact: vi.fn().mockResolvedValue(undefined),
+  startUndo: vi.fn().mockResolvedValue(undefined),
+  startRedo: vi.fn().mockResolvedValue(undefined),
   startApps: vi.fn().mockResolvedValue(undefined),
   startMcp: vi.fn().mockResolvedValue(undefined),
   startStatus: vi.fn().mockResolvedValue(undefined),
@@ -390,6 +392,38 @@ describe("useQueuedSend", () => {
     });
 
     expect(startCompact).toHaveBeenCalledWith("/compact now");
+    expect(options.sendUserMessage).not.toHaveBeenCalled();
+    expect(options.startReview).not.toHaveBeenCalled();
+  });
+
+  it("routes /undo to the undo handler", async () => {
+    const startUndo = vi.fn().mockResolvedValue(undefined);
+    const options = makeOptions({ startUndo });
+    const { result } = renderHook((props) => useQueuedSend(props), {
+      initialProps: options,
+    });
+
+    await act(async () => {
+      await result.current.handleSend("/undo", ["img-1"]);
+    });
+
+    expect(startUndo).toHaveBeenCalledWith("/undo");
+    expect(options.sendUserMessage).not.toHaveBeenCalled();
+    expect(options.startReview).not.toHaveBeenCalled();
+  });
+
+  it("routes /redo to the redo handler", async () => {
+    const startRedo = vi.fn().mockResolvedValue(undefined);
+    const options = makeOptions({ startRedo });
+    const { result } = renderHook((props) => useQueuedSend(props), {
+      initialProps: options,
+    });
+
+    await act(async () => {
+      await result.current.handleSend("/redo", ["img-1"]);
+    });
+
+    expect(startRedo).toHaveBeenCalledWith("/redo");
     expect(options.sendUserMessage).not.toHaveBeenCalled();
     expect(options.startReview).not.toHaveBeenCalled();
   });

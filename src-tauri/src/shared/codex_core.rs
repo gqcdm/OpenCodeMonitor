@@ -105,6 +105,94 @@ fn sort_replay_messages_chronologically(messages: &mut [Value]) {
     );
 }
 
+fn last_revertable_message_id(messages: &[Value]) -> Option<String> {
+    let mut ordered = messages.to_vec();
+    ordered.sort_by(|a, b| {
+        let a_key = replay_message_order_key(a.get("info").unwrap_or(a));
+        let b_key = replay_message_order_key(b.get("info").unwrap_or(b));
+        match (a_key, b_key) {
+            (Some(a_key), Some(b_key)) => a_key.cmp(&b_key),
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+
+    ordered.iter().rev().find_map(|entry| {
+        entry.get("info")
+            .and_then(|info| info.get("id"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn apply_pending_revert_to_replay_messages(messages: &mut Vec<Value>, session_details: Option<&Value>) {
+    let Some(revert) = session_details
+        .and_then(|details| details.get("revert"))
+        .filter(|value| value.is_object())
+    else {
+        return;
+    };
+
+    let Some(revert_message_id) = revert
+        .get("messageID")
+        .or_else(|| revert.get("messageId"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    let revert_part_id = revert
+        .get("partID")
+        .or_else(|| revert.get("partId"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let mut reached_target = false;
+    let mut filtered: Vec<Value> = Vec::with_capacity(messages.len());
+
+    for mut entry in messages.drain(..) {
+        let message_id = entry
+            .get("info")
+            .and_then(|info| info.get("id"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+
+        if reached_target {
+            continue;
+        }
+
+        if message_id != revert_message_id {
+            filtered.push(entry);
+            continue;
+        }
+
+        reached_target = true;
+
+        if let Some(target_part_id) = revert_part_id.as_deref() {
+            if let Some(parts) = entry.get_mut("parts").and_then(|v| v.as_array_mut()) {
+                if let Some(remove_start) = parts.iter().position(|part| {
+                    part.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .unwrap_or_default()
+                        == target_part_id
+                }) {
+                    parts.truncate(remove_start);
+                }
+            }
+            filtered.push(entry);
+        }
+    }
+
+    *messages = filtered;
+}
+
 async fn hidden_session_ids_for_workspace(
     workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
     workspace_id: &str,
@@ -449,6 +537,7 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
     if let Some(msg_list) = messages.as_array() {
         let mut ordered_messages = msg_list.clone();
         sort_replay_messages_chronologically(&mut ordered_messages);
+        apply_pending_revert_to_replay_messages(&mut ordered_messages, session_details.as_ref());
         for msg_entry in &ordered_messages {
             let role = msg_entry
                 .get("info")
@@ -886,6 +975,48 @@ pub(crate) async fn archive_thread_core(
         .rest_patch(&path, json!({ "time": { "archived": now_unix_ms() } }))
         .await?;
     Ok(json!({ "ok": true }))
+}
+
+pub(crate) async fn undo_last_turn_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let messages_path = format!("/session/{thread_id}/message");
+    let messages = session.rest_get(&messages_path).await?;
+    let message_list = messages
+        .as_array()
+        .ok_or_else(|| "Invalid message list returned for undo.".to_string())?;
+    let message_id = last_revertable_message_id(message_list)
+        .ok_or_else(|| "No messages available to undo in this thread.".to_string())?;
+
+    let path = format!("/session/{thread_id}/revert");
+    let response = session
+        .rest_post(&path, json!({ "messageID": message_id }))
+        .await?;
+
+    Ok(json!({
+        "result": {
+            "thread": resume_thread_result_thread(&thread_id, Some(&response))
+        }
+    }))
+}
+
+pub(crate) async fn redo_last_turn_core(
+    sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    workspace_id: String,
+    thread_id: String,
+) -> Result<Value, String> {
+    let session = get_session_clone(sessions, &workspace_id).await?;
+    let path = format!("/session/{thread_id}/unrevert");
+    let response = session.rest_post(&path, json!({})).await?;
+
+    Ok(json!({
+        "result": {
+            "thread": resume_thread_result_thread(&thread_id, Some(&response))
+        }
+    }))
 }
 
 pub(crate) async fn compact_thread_core(
@@ -2116,6 +2247,74 @@ mod tests {
             })
             .collect();
         assert_eq!(ids, vec!["msg-older", "msg-middle", "msg-newer"]);
+    }
+
+    #[test]
+    fn last_revertable_message_id_selects_latest_message_after_sorting() {
+        let messages = vec![
+            json!({ "info": { "id": "msg_new", "time": { "created": 30 } } }),
+            json!({ "info": { "id": "msg_old", "time": { "created": 10 } } }),
+            json!({ "info": { "id": "msg_mid", "createdAt": 20 } }),
+        ];
+
+        let id = last_revertable_message_id(&messages);
+        assert_eq!(id.as_deref(), Some("msg_new"));
+    }
+
+    #[test]
+    fn last_revertable_message_id_skips_entries_without_message_info_id() {
+        let messages = vec![
+            json!({ "info": { "time": { "created": 10 } } }),
+            json!({ "parts": [] }),
+        ];
+
+        assert_eq!(last_revertable_message_id(&messages), None);
+    }
+
+    #[test]
+    fn replay_filters_messages_after_pending_revert_message() {
+        let mut messages = vec![
+            json!({ "info": { "id": "m1", "time": { "created": 10 } }, "parts": [] }),
+            json!({ "info": { "id": "m2", "time": { "created": 20 } }, "parts": [] }),
+            json!({ "info": { "id": "m3", "time": { "created": 30 } }, "parts": [] }),
+        ];
+
+        apply_pending_revert_to_replay_messages(
+            &mut messages,
+            Some(&json!({ "revert": { "messageID": "m2" } })),
+        );
+
+        let ids: Vec<&str> = messages
+            .iter()
+            .filter_map(|entry| entry.get("info")?.get("id")?.as_str())
+            .collect();
+        assert_eq!(ids, vec!["m1"]);
+    }
+
+    #[test]
+    fn replay_truncates_parts_for_pending_part_revert() {
+        let mut messages = vec![json!({
+            "info": { "id": "m1", "time": { "created": 10 } },
+            "parts": [
+                { "id": "p1", "type": "text", "text": "a" },
+                { "id": "p2", "type": "text", "text": "b" },
+                { "id": "p3", "type": "text", "text": "c" }
+            ]
+        })];
+
+        apply_pending_revert_to_replay_messages(
+            &mut messages,
+            Some(&json!({ "revert": { "messageID": "m1", "partID": "p2" } })),
+        );
+
+        let part_ids: Vec<&str> = messages[0]
+            .get("parts")
+            .and_then(|v| v.as_array())
+            .expect("parts array")
+            .iter()
+            .filter_map(|part| part.get("id").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(part_ids, vec!["p1"]);
     }
 
     #[test]

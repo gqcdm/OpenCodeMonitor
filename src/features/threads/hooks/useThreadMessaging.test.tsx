@@ -10,6 +10,8 @@ import {
   getAppsList as getAppsListService,
   listMcpServerStatus as listMcpServerStatusService,
   compactThread as compactThreadService,
+  undoLastTurn as undoLastTurnService,
+  redoLastTurn as redoLastTurnService,
   listSlashCommands as listSlashCommandsService,
   executeSlashCommand as executeSlashCommandService,
 } from "@services/tauri";
@@ -30,6 +32,8 @@ vi.mock("@services/tauri", () => ({
   getAppsList: vi.fn(),
   listMcpServerStatus: vi.fn(),
   compactThread: vi.fn(),
+  undoLastTurn: vi.fn(),
+  redoLastTurn: vi.fn(),
   listSlashCommands: vi.fn().mockResolvedValue({ result: { data: [] } }),
   executeSlashCommand: vi.fn().mockResolvedValue({}),
 }));
@@ -98,6 +102,12 @@ describe.skip("useThreadMessaging telemetry", () => {
     );
     vi.mocked(compactThreadService).mockResolvedValue(
       {} as Awaited<ReturnType<typeof compactThreadService>>,
+    );
+    vi.mocked(undoLastTurnService).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof undoLastTurnService>>,
+    );
+    vi.mocked(redoLastTurnService).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof redoLastTurnService>>,
     );
     vi.mocked(listSlashCommandsService).mockResolvedValue({
       result: { data: [] },
