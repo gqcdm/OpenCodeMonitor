@@ -187,6 +187,45 @@ async fn latest_change_under_dir(root: &Path) -> Option<chrono::DateTime<chrono:
     latest
 }
 
+async fn latest_change_in_tracked_config_paths(
+    config_root: &Path,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let tracked_paths = [
+        config_root.join("opencode.jsonc"),
+        config_root.join("command"),
+        config_root.join("agent"),
+        config_root.join("skill"),
+    ];
+
+    let mut latest = None;
+
+    for tracked_path in tracked_paths {
+        let metadata = match tokio::fs::metadata(&tracked_path).await {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+
+        if let Ok(modified) = metadata.modified() {
+            let modified_at = chrono::DateTime::<chrono::Utc>::from(modified);
+            latest = Some(match latest {
+                Some(current) if current >= modified_at => current,
+                _ => modified_at,
+            });
+        }
+
+        if metadata.is_dir() {
+            if let Some(dir_latest) = latest_change_under_dir(&tracked_path).await {
+                latest = Some(match latest {
+                    Some(current) if current >= dir_latest => current,
+                    _ => dir_latest,
+                });
+            }
+        }
+    }
+
+    latest
+}
+
 pub(crate) async fn opencode_restart_required_status() -> Value {
     let Some(config_root) = crate::codex::home::resolve_default_codex_home() else {
         return json!({
@@ -237,7 +276,7 @@ pub(crate) async fn opencode_restart_required_status() -> Value {
         });
     };
 
-    let latest_change = latest_change_under_dir(&config_root).await;
+    let latest_change = latest_change_in_tracked_config_paths(&config_root).await;
     let required = latest_change
         .map(|changed_at| changed_at > server_started_at)
         .unwrap_or(false);
@@ -251,7 +290,7 @@ pub(crate) async fn opencode_restart_required_status() -> Value {
         "serverStartedAt": server_started_at.to_rfc3339(),
         "latestConfigChangeAt": latest_change.map(|dt| dt.to_rfc3339()),
         "reason": if required {
-            Some("Config changed since server start")
+            Some("OpenCode config changed since server start")
         } else {
             None::<&str>
         }

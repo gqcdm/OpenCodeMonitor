@@ -107,7 +107,7 @@ export function SidebarCornerActions({
   const reasonText = restartNotice.reason?.trim().replace(/[.\s]+$/, "") ?? "";
   const restartTooltip = reasonText
     ? `${reasonText}. Restart OpenCode to refresh agents and models.`
-    : "Config changed. Restart OpenCode to refresh agents and models.";
+    : "OpenCode config changed. Restart OpenCode to refresh agents and models.";
 
   return (
     <div className="sidebar-corner-actions">
