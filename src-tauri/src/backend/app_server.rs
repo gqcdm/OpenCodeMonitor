@@ -74,7 +74,11 @@ struct PidFileData {
 /// Returns the path to the PID file (~/.opencode-monitor/server.pid).
 fn pid_file_path() -> Option<PathBuf> {
     let home = env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".opencode-monitor").join("server.pid"))
+    Some(
+        PathBuf::from(home)
+            .join(".opencode-monitor")
+            .join("server.pid"),
+    )
 }
 
 /// Write PID file after starting the server.
@@ -434,7 +438,10 @@ pub(crate) async fn global_rest_get(
     let mut url = format!("{base_url}{path}");
     if let Some(directory) = directory.filter(|value| !value.trim().is_empty()) {
         let separator = if path.contains('?') { "&" } else { "?" };
-        url = format!("{url}{separator}directory={}", urlencoding::encode(directory));
+        url = format!(
+            "{url}{separator}directory={}",
+            urlencoding::encode(directory)
+        );
     }
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {

@@ -16,7 +16,7 @@ use crate::codex::config as codex_config;
 use crate::codex::home::{resolve_default_codex_home, resolve_workspace_codex_home};
 use crate::rules;
 use crate::shared::account::{build_account_response, read_auth_account};
-use crate::shared::diff_utils::generate_edit_diff;
+use crate::shared::diff_utils::{generate_apply_patch_changes, generate_edit_diff};
 use crate::types::WorkspaceEntry;
 
 pub(crate) enum CodexLoginCancelState {
@@ -637,7 +637,7 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
 
 fn replay_tool_kind_to_item_type(tool_name: &str) -> &str {
     match tool_name {
-        "edit" | "write" | "create" => "fileChange",
+        "edit" | "write" | "create" | "apply_patch" => "fileChange",
         "bash" | "command" | "terminal" => "commandExecution",
         "task" => "collabToolCall",
         "todowrite" => "todowrite",
@@ -704,16 +704,20 @@ fn replay_build_tool_item(
     } else if item_type == "fileChange" {
         let mut changes = Vec::new();
         if let Some(inp) = raw_input {
-            for key in &["filePath", "path"] {
-                if let Some(path) = inp.get(key).and_then(|v| v.as_str()) {
-                    if !path.is_empty() {
-                        let mut change = json!({ "path": path, "kind": "modify" });
-                        // Generate diff from oldString/newString if available
-                        if let Some(diff) = generate_edit_diff(inp, path) {
-                            change["diff"] = json!(diff);
+            if let Some(parsed_changes) = generate_apply_patch_changes(inp) {
+                changes = parsed_changes;
+            } else {
+                for key in &["filePath", "path"] {
+                    if let Some(path) = inp.get(key).and_then(|v| v.as_str()) {
+                        if !path.is_empty() {
+                            let mut change = json!({ "path": path, "kind": "modify" });
+                            // Generate diff from oldString/newString if available
+                            if let Some(diff) = generate_edit_diff(inp, path) {
+                                change["diff"] = json!(diff);
+                            }
+                            changes.push(change);
+                            break;
                         }
-                        changes.push(change);
-                        break;
                     }
                 }
             }
@@ -895,7 +899,9 @@ pub(crate) async fn compact_thread_core(
     let model_override = if let Some(ref model_id) = requested_model {
         resolve_prompt_model_override(session.as_ref(), model_id)
             .await
-            .ok_or_else(|| format!("Failed to resolve model `{model_id}` for context compaction."))?
+            .ok_or_else(|| {
+                format!("Failed to resolve model `{model_id}` for context compaction.")
+            })?
     } else {
         return Err(
             "No model selected for context compaction. Select a model (or connect a provider) and try again."
@@ -1728,7 +1734,8 @@ pub(crate) fn model_list_response_from_providers(providers: &Value) -> Value {
                 .trim()
                 .to_string();
             let qualified_id = format!("{provider_id}/{model_id}");
-            let is_default = model_id == default_for_provider || canonical_model_id == default_for_provider;
+            let is_default =
+                model_id == default_for_provider || canonical_model_id == default_for_provider;
 
             // Variants keys are reasoning effort levels (e.g. "low", "medium", "high", "max").
             let variants = model

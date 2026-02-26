@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::shared::diff_utils::generate_edit_diff;
+use crate::shared::diff_utils::{generate_apply_patch_changes, generate_edit_diff};
 
 /// Per-session turn state — tracks active turn and item IDs for a single session.
 #[derive(Default)]
@@ -1052,7 +1052,7 @@ fn translate_tool_part(
             }));
 
             if let Some(ref input) = raw_input {
-                let delta_text = serde_json::to_string_pretty(input).unwrap_or_default();
+                let delta_text = tool_input_delta_text(tool_name, input);
                 if !delta_text.is_empty() {
                     let method = if item_type == "fileChange" {
                         "item/fileChange/outputDelta"
@@ -1120,6 +1120,55 @@ fn translate_tool_part(
     }
 
     events
+}
+
+fn tool_input_delta_text(tool_name: &str, raw_input: &Value) -> String {
+    if tool_name == "apply_patch" {
+        return build_apply_patch_delta_summary(raw_input)
+            .unwrap_or_else(|| "Applying patch...".to_string());
+    }
+
+    serde_json::to_string_pretty(raw_input).unwrap_or_default()
+}
+
+fn build_apply_patch_delta_summary(raw_input: &Value) -> Option<String> {
+    let patch_text = raw_input.get("patchText").and_then(|v| v.as_str())?;
+    if patch_text.trim().is_empty() {
+        return Some("Applying patch...".to_string());
+    }
+
+    let changes = generate_apply_patch_changes(raw_input)?;
+    if changes.is_empty() {
+        return Some("Applying patch...".to_string());
+    }
+
+    let mut labels = Vec::new();
+    for change in changes.iter().take(3) {
+        let kind = change
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("modify");
+        let path = change
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("file");
+        labels.push(format!("{kind} {path}"));
+    }
+
+    let total = changes.len();
+    let mut summary = format!(
+        "Applying patch to {total} file{}",
+        if total == 1 { "" } else { "s" }
+    );
+    if !labels.is_empty() {
+        summary.push_str(": ");
+        summary.push_str(&labels.join(", "));
+    }
+    if total > labels.len() {
+        summary.push_str(&format!(", +{} more", total - labels.len()));
+    }
+
+    Some(summary)
 }
 
 fn build_explore_entry(tool_name: &str, title: &str, raw_input: Option<&Value>) -> Value {
@@ -1731,7 +1780,7 @@ pub(crate) fn build_agent_message_completed(
 
 fn tool_kind_to_item_type(kind: &str) -> &str {
     match kind {
-        "edit" | "write" | "create" => "fileChange",
+        "edit" | "write" | "create" | "apply_patch" => "fileChange",
         "bash" | "command" | "terminal" => "commandExecution",
         "read" | "grep" | "glob" | "list" | "ls" => "explore",
         "todowrite" => "todowrite",
@@ -1935,7 +1984,9 @@ fn build_tool_item(
         let mut changes = changes_from_content.unwrap_or_default();
         if changes.is_empty() {
             if let Some(input) = raw_input {
-                if let Some(path) = file_path_from_raw_input(input) {
+                if let Some(parsed_changes) = generate_apply_patch_changes(input) {
+                    changes = parsed_changes;
+                } else if let Some(path) = file_path_from_raw_input(input) {
                     let mut change = json!({ "path": path, "kind": "modify" });
                     if let Some(diff) = generate_edit_diff(input, &path) {
                         change["diff"] = json!(diff);
@@ -2121,6 +2172,90 @@ mod tests {
         assert!(diff.contains("@@"));
         assert!(diff.contains("-    println!(\"Hello\");"));
         assert!(diff.contains("+    println!(\"Hello, world!\");"));
+    }
+
+    #[test]
+    fn apply_patch_tool_generates_file_change_entries() {
+        let mut state = make_state();
+        let completed = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_apply_patch",
+                    "tool": "apply_patch",
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "patchText": "*** Begin Patch\n*** Update File: src/main.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n*** Add File: notes.txt\n+hello\n*** Delete File: old.txt\n*** Update File: src/from.rs\n*** Move to: src/to.rs\n@@ -1,1 +1,1 @@\n-before\n+after\n*** End Patch"
+                        },
+                        "output": "Patch applied successfully."
+                    }
+                }
+            }
+        });
+
+        let events = translate_sse_event(&completed, &mut state);
+        assert_eq!(events.len(), 1);
+        let item = &events[0]["params"]["item"];
+        assert_eq!(item["type"], "fileChange");
+
+        let changes = item["changes"].as_array().expect("changes should be array");
+        assert_eq!(changes.len(), 4);
+        assert_eq!(changes[0]["path"], "src/main.rs");
+        assert_eq!(changes[0]["kind"], "modify");
+        assert!(changes[0]["diff"]
+            .as_str()
+            .expect("modify diff")
+            .contains("--- a/src/main.rs"));
+
+        assert_eq!(changes[1]["path"], "notes.txt");
+        assert_eq!(changes[1]["kind"], "add");
+        assert!(changes[1]["diff"]
+            .as_str()
+            .expect("add diff")
+            .contains("--- /dev/null"));
+
+        assert_eq!(changes[2]["path"], "old.txt");
+        assert_eq!(changes[2]["kind"], "delete");
+        assert!(changes[2].get("diff").is_none());
+
+        assert_eq!(changes[3]["path"], "src/to.rs");
+        let rename_diff = changes[3]["diff"].as_str().expect("rename diff");
+        assert!(rename_diff.contains("--- a/src/from.rs"));
+        assert!(rename_diff.contains("+++ b/src/to.rs"));
+    }
+
+    #[test]
+    fn apply_patch_running_delta_uses_summary_not_patch_text() {
+        let mut state = make_state();
+        let running = json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "id": "tc_apply_patch_running",
+                    "tool": "apply_patch",
+                    "state": {
+                        "status": "running",
+                        "input": {
+                            "patchText": "*** Begin Patch\n*** Update File: src/main.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n*** Add File: notes.txt\n+hello\n*** End Patch"
+                        }
+                    }
+                }
+            }
+        });
+
+        let events = translate_sse_event(&running, &mut state);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["method"], "item/started");
+        assert_eq!(events[1]["method"], "item/fileChange/outputDelta");
+        let delta = events[1]["params"]["delta"].as_str().expect("delta string");
+        assert!(delta.contains("Applying patch to 2 files"));
+        assert!(delta.contains("modify src/main.rs"));
+        assert!(delta.contains("add notes.txt"));
+        assert!(!delta.contains("*** Begin Patch"));
+        assert!(!delta.contains("patchText"));
     }
 
     #[test]

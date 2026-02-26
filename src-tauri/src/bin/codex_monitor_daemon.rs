@@ -806,31 +806,29 @@ impl DaemonState {
         };
         let directory = if let Some(workspace_id) = workspace_id.clone() {
             let workspaces = self.workspaces.lock().await;
-            workspaces.get(&workspace_id).map(|entry| entry.path.clone())
+            workspaces
+                .get(&workspace_id)
+                .map(|entry| entry.path.clone())
         } else {
             None
         };
-        let providers =
-            backend::app_server::global_rest_get(
-                codex_bin,
-                codex_args.as_deref(),
-                "/config/providers",
-                directory.as_deref(),
-            )
-            .await?;
+        let providers = backend::app_server::global_rest_get(
+            codex_bin,
+            codex_args.as_deref(),
+            "/config/providers",
+            directory.as_deref(),
+        )
+        .await?;
         let mut response = codex_core::model_list_response_from_providers(&providers);
         if let Some(obj) = response.as_object_mut() {
-            obj.insert(
-                "debug".to_string(),
-                {
-                    let mut debug = codex_core::model_list_debug_from_providers(&providers);
-                    if let Some(debug_obj) = debug.as_object_mut() {
-                        debug_obj.insert("requestWorkspaceId".to_string(), json!(workspace_id));
-                        debug_obj.insert("requestDirectory".to_string(), json!(directory));
-                    }
-                    debug
-                },
-            );
+            obj.insert("debug".to_string(), {
+                let mut debug = codex_core::model_list_debug_from_providers(&providers);
+                if let Some(debug_obj) = debug.as_object_mut() {
+                    debug_obj.insert("requestWorkspaceId".to_string(), json!(workspace_id));
+                    debug_obj.insert("requestDirectory".to_string(), json!(directory));
+                }
+                debug
+            });
         }
         Ok(response)
     }

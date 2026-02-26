@@ -1,8 +1,8 @@
 pub(crate) mod account;
 pub(crate) mod codex_aux_core;
 pub(crate) mod codex_core;
-pub(crate) mod diff_utils;
 pub(crate) mod codex_update_core;
+pub(crate) mod diff_utils;
 pub(crate) mod files_core;
 pub(crate) mod git_core;
 pub(crate) mod git_ui_core;

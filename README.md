@@ -44,3 +44,4 @@ OpenCodeMonitor is a fork of [CodexMonitor](https://github.com/Dimillian/CodexMo
 ## License
 
 MIT — see [LICENSE](LICENSE)
+

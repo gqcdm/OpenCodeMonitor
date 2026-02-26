@@ -8,14 +8,13 @@ pub(crate) mod args;
 pub(crate) mod config;
 pub(crate) mod home;
 
+pub(crate) use crate::backend::app_server::WorkspaceSession;
 use crate::backend::app_server::{
     global_rest_get, opencode_restart_required_status as app_server_restart_required_status,
-    opencode_server_status as app_server_status,
-    restart_opencode_server as app_server_restart,
+    opencode_server_status as app_server_status, restart_opencode_server as app_server_restart,
     spawn_workspace_session as spawn_workspace_session_inner,
     takeover_external_server as app_server_takeover,
 };
-pub(crate) use crate::backend::app_server::WorkspaceSession;
 use crate::backend::events::AppServerEvent;
 use crate::event_sink::TauriEventSink;
 use crate::remote_backend;
@@ -531,7 +530,9 @@ pub(crate) async fn settings_model_list(
     };
     let directory = if let Some(workspace_id) = workspace_id.clone() {
         let workspaces = state.workspaces.lock().await;
-        workspaces.get(&workspace_id).map(|entry| entry.path.clone())
+        workspaces
+            .get(&workspace_id)
+            .map(|entry| entry.path.clone())
     } else {
         None
     };
@@ -544,17 +545,14 @@ pub(crate) async fn settings_model_list(
     .await?;
     let mut response = codex_core::model_list_response_from_providers(&providers);
     if let Some(obj) = response.as_object_mut() {
-        obj.insert(
-            "debug".to_string(),
-            {
-                let mut debug = codex_core::model_list_debug_from_providers(&providers);
-                if let Some(debug_obj) = debug.as_object_mut() {
-                    debug_obj.insert("requestWorkspaceId".to_string(), json!(workspace_id));
-                    debug_obj.insert("requestDirectory".to_string(), json!(directory));
-                }
-                debug
-            },
-        );
+        obj.insert("debug".to_string(), {
+            let mut debug = codex_core::model_list_debug_from_providers(&providers);
+            if let Some(debug_obj) = debug.as_object_mut() {
+                debug_obj.insert("requestWorkspaceId".to_string(), json!(workspace_id));
+                debug_obj.insert("requestDirectory".to_string(), json!(directory));
+            }
+            debug
+        });
     }
     Ok(response)
 }
@@ -565,8 +563,13 @@ pub(crate) async fn opencode_restart_required_status(
     app: AppHandle,
 ) -> Result<Value, String> {
     if remote_backend::is_remote_mode(&*state).await {
-        return remote_backend::call_remote(&*state, app, "opencode_restart_required_status", json!({}))
-            .await;
+        return remote_backend::call_remote(
+            &*state,
+            app,
+            "opencode_restart_required_status",
+            json!({}),
+        )
+        .await;
     }
     Ok(app_server_restart_required_status().await)
 }
@@ -577,7 +580,8 @@ pub(crate) async fn opencode_server_status(
     app: AppHandle,
 ) -> Result<Value, String> {
     if remote_backend::is_remote_mode(&*state).await {
-        return remote_backend::call_remote(&*state, app, "opencode_server_status", json!({})).await;
+        return remote_backend::call_remote(&*state, app, "opencode_server_status", json!({}))
+            .await;
     }
     Ok(app_server_status().await)
 }
@@ -588,7 +592,8 @@ pub(crate) async fn opencode_server_restart(
     app: AppHandle,
 ) -> Result<Value, String> {
     if remote_backend::is_remote_mode(&*state).await {
-        return remote_backend::call_remote(&*state, app, "opencode_server_restart", json!({})).await;
+        return remote_backend::call_remote(&*state, app, "opencode_server_restart", json!({}))
+            .await;
     }
     let (codex_bin, codex_args) = {
         let settings = state.app_settings.lock().await;
