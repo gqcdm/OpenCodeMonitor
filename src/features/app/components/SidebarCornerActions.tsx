@@ -121,6 +121,17 @@ export function SidebarCornerActions({
         >
           <Settings size={14} aria-hidden />
         </button>
+        {showDebugButton && (
+          <button
+            className="ghost sidebar-corner-button"
+            type="button"
+            onClick={onOpenDebug}
+            aria-label="Open debug log"
+            title="Debug log"
+          >
+            <ScrollText size={14} aria-hidden />
+          </button>
+        )}
         {restartNotice.required && (
           <div className="sidebar-restart-banner-wrap">
             <button
@@ -132,7 +143,7 @@ export function SidebarCornerActions({
               aria-describedby="sidebar-restart-tooltip"
             >
               <RotateCcw size={12} aria-hidden />
-              <span>{restartingServer ? "Restarting..." : "Config changed"}</span>
+              <span>{restartingServer ? "Restarting..." : "Restart"}</span>
             </button>
             <div
               id="sidebar-restart-tooltip"
@@ -143,17 +154,6 @@ export function SidebarCornerActions({
               <span>{restartTooltip}</span>
             </div>
           </div>
-        )}
-        {showDebugButton && (
-          <button
-            className="ghost sidebar-corner-button"
-            type="button"
-            onClick={onOpenDebug}
-            aria-label="Open debug log"
-            title="Debug log"
-          >
-            <ScrollText size={14} aria-hidden />
-          </button>
         )}
         {showAccountSwitcher && (
           <div className="sidebar-account-menu" ref={accountMenuRef}>
