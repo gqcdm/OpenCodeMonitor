@@ -536,6 +536,29 @@ function sortItemsBySyntheticOrder(items: ConversationItem[]) {
       }
 
       result.splice(insertAt, 0, current);
+    } else if (current.isToolItem && current.key) {
+      const toolSeq = current.key.seq;
+      const family = current.key.family;
+      let insertBeforeAssistantAt = -1;
+
+      for (let j = result.length - 1; j >= 0; j--) {
+        const prev = result[j];
+        if (!prev.key || prev.key.family !== family) break;
+        if (prev.isUserMessage) break;
+        if (prev.isAssistantMessage) {
+          if (toolSeq > prev.key.seq && toolSeq - prev.key.seq <= maxTurnWindow) {
+            insertBeforeAssistantAt = j;
+          }
+          break;
+        }
+        if (!prev.isToolItem) break;
+      }
+
+      if (insertBeforeAssistantAt >= 0) {
+        result.splice(insertBeforeAssistantAt, 0, current);
+      } else {
+        result.push(current);
+      }
     } else {
       result.push(current);
     }

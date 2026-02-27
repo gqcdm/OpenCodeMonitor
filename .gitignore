@@ -30,6 +30,7 @@ CodexMonitor.zip
 .codexmonitor/
 public/assets/material-icons/
 .opencode/
+tmp/opencode/
 
 # Nix
 result

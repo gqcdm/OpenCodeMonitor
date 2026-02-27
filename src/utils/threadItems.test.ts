@@ -263,6 +263,44 @@ describe("threadItems", () => {
     expect(prepared[2].id).toBe("item_2"); // tool
   });
 
+  it("keeps trailing tools above the final assistant message", () => {
+    const items: ConversationItem[] = [
+      {
+        id: "item_1",
+        kind: "message",
+        role: "user",
+        text: "Run checks",
+      },
+      {
+        id: "item_2",
+        kind: "message",
+        role: "assistant",
+        text: "All checks completed.",
+      },
+      {
+        id: "item_3",
+        kind: "tool",
+        toolType: "commandExecution",
+        title: "Command: npm run test",
+        detail: "",
+        status: "completed",
+        output: "",
+      },
+      {
+        id: "item_4",
+        kind: "tool",
+        toolType: "commandExecution",
+        title: "Command: npm run typecheck",
+        detail: "",
+        status: "completed",
+        output: "",
+      },
+    ];
+
+    const prepared = prepareThreadItems(items);
+    expect(prepared.map((item) => item.id)).toEqual(["item_1", "item_3", "item_4", "item_2"]);
+  });
+
   it("summarizes explored reads and hides raw commands", () => {
     const items: ConversationItem[] = [
       {

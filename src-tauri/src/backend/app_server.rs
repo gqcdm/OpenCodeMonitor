@@ -20,8 +20,6 @@ use crate::types::WorkspaceEntry;
 
 #[cfg(target_os = "windows")]
 use crate::shared::process_core::{build_cmd_c_command, resolve_windows_executable};
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 
 fn extract_thread_id(value: &Value) -> Option<String> {
     let params = value.get("params")?;
@@ -115,9 +113,58 @@ async fn delete_pid_file() {
 }
 
 /// Check if a process with the given PID is still running.
+#[cfg(unix)]
 fn is_process_running(pid: u32) -> bool {
-    // kill(pid, 0) checks if process exists without sending a signal
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    let result = unsafe { libc::kill(pid as i32, 0) };
+    if result == 0 {
+        return true;
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(code) => code != libc::ESRCH,
+        None => false,
+    }
+}
+
+/// Check if a process with the given PID is still running.
+#[cfg(windows)]
+fn is_process_running(pid: u32) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.starts_with("INFO:") {
+        return false;
+    }
+    trimmed.contains(&format!("\"{pid}\""))
+}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32, force: bool) {
+    let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+    unsafe {
+        libc::kill(pid as i32, signal);
+    }
+}
+
+#[cfg(windows)]
+fn terminate_process(pid: u32, force: bool) {
+    let mut command = std::process::Command::new("taskkill");
+    command.args(["/PID", &pid.to_string(), "/T"]);
+    if force {
+        command.arg("/F");
+    }
+    let _ = command.output();
 }
 
 /// Try to reclaim an orphaned server (one we previously started but lost track of).
@@ -387,10 +434,8 @@ async fn kill_process_on_port(port: u16) -> Result<(), String> {
         .collect();
 
     for pid_str in pids {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-            }
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            terminate_process(pid, false);
         }
     }
 
@@ -412,10 +457,8 @@ async fn kill_process_on_port(port: u16) -> Result<(), String> {
                 .lines()
                 .collect();
             for pid_str in pids {
-                if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                    unsafe {
-                        libc::kill(pid, libc::SIGKILL);
-                    }
+                if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                    terminate_process(pid, true);
                 }
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -618,14 +661,10 @@ pub(crate) async fn restart_opencode_server(
     // Verify port matches to avoid killing an unrelated process if the PID was reused.
     if let Some(pid_data) = read_pid_file().await {
         if is_process_running(pid_data.pid) && pid_data.port == REST_PORT {
-            unsafe {
-                libc::kill(pid_data.pid as i32, libc::SIGTERM);
-            }
+            terminate_process(pid_data.pid, false);
             tokio::time::sleep(Duration::from_millis(500)).await;
             if is_process_running(pid_data.pid) {
-                unsafe {
-                    libc::kill(pid_data.pid as i32, libc::SIGKILL);
-                }
+                terminate_process(pid_data.pid, true);
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
         }
