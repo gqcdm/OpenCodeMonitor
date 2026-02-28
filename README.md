@@ -1,27 +1,65 @@
 # OpenCode Monitor
 
-A macOS desktop app for monitoring and interacting with [OpenCode](https://github.com/sst/opencode) agents across multiple workspaces.
+OpenCode Monitor is a desktop app for monitoring and interacting with [OpenCode](https://github.com/anomalyco/opencode) agents across multiple workspaces.
 
-Forked from [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by Dimillian, adapted to use OpenCode's REST API + SSE backend while preserving CodexMonitor frontend event compatibility.
+It is forked from [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by Dimillian, adapted to use OpenCode's REST API + SSE backend while preserving CodexMonitor-shaped frontend event contracts.
+
+OpenCode Monitor is an independent community project and is not affiliated with or endorsed by the OpenCode team.
 
 ## Status
 
-**Active development** — the REST/SSE backend is live for thread/session lifecycle, event translation, messaging, model discovery, and image attachments. Remaining work focuses on feature-parity polish and OpenCode-specific UX cleanup.
+**Active development** — core REST/SSE support is live for thread/session lifecycle, event translation, messaging, model discovery, approvals, and image attachments. Remaining work is parity polish and OpenCode-specific UX cleanup.
 
-## Architecture
+## Requirements
 
-- **Frontend**: React 19 + Vite + TypeScript
-- **Backend**: Tauri 2 (Rust) — runs against `opencode serve` (HTTP REST + SSE)
-- **Protocol**: OpenCode REST API + SSE, translated in Rust to CodexMonitor-shaped frontend events
+### 1) OpenCode CLI (required)
 
-## Development
+This app expects a running OpenCode server (`opencode serve`). Install OpenCode first:
+
+```bash
+# Recommended (macOS/Linux)
+brew install anomalyco/tap/opencode
+
+# Or npm
+npm i -g opencode-ai@latest
+```
+
+Then verify the CLI:
+
+```bash
+opencode --version
+```
+
+### 2) Local tooling for development
+
+- Node.js 20+
+- npm 10+
+- Rust stable toolchain (`cargo`)
+
+## First Run
+
+1. Start OpenCode server in a separate terminal:
+
+```bash
+opencode serve --port 4040
+```
+
+2. Start OpenCode Monitor:
 
 ```bash
 npm install
 npm run tauri:dev
 ```
 
-### Validation
+3. In Settings -> Server, ensure the backend URL points to your OpenCode server (default: `http://127.0.0.1:4040`).
+
+## Architecture
+
+- **Frontend**: React 19 + Vite + TypeScript
+- **Backend**: Tauri 2 (Rust)
+- **Protocol**: OpenCode REST API + SSE, translated in Rust to CodexMonitor-shaped frontend events
+
+## Validation
 
 ```bash
 npm run typecheck
@@ -30,13 +68,25 @@ cd src-tauri && cargo check
 cd src-tauri && cargo test
 ```
 
+## Release Build
+
+```bash
+npm run tauri:build
+```
+
+## Repo Guides
+
+- `docs/codebase-map.md` — task-oriented file map
+- `docs/shaping/rest-api-migration.md` — backend architecture and parity notes
+- `docs/app-server-events.md` — frontend event contract
+
 ## Credits & Support
 
-OpenCodeMonitor is a fork of [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by [Thomas Ricouard](https://github.com/Dimillian). The majority of this app's functionality comes from his excellent work.
+OpenCode Monitor is built on top of [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by [Thomas Ricouard](https://github.com/Dimillian).
 
 **Support the original author:**
 - [Sponsor Thomas on GitHub](https://github.com/sponsors/Dimillian)
-- [Ice Cubes for Mastodon](https://apps.apple.com/app/ice-cubes-for-mastodon/id6444915884) — his open-source Mastodon client
+- [Ice Cubes for Mastodon](https://apps.apple.com/app/ice-cubes-for-mastodon/id6444915884)
 
 **Support this fork:**
 - [Buy me a coffee](https://buymeacoffee.com/jacobjmc)
@@ -44,4 +94,3 @@ OpenCodeMonitor is a fork of [CodexMonitor](https://github.com/Dimillian/CodexMo
 ## License
 
 MIT — see [LICENSE](LICENSE)
-

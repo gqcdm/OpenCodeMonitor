@@ -14,19 +14,19 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 TARGET="${TARGET:-aarch64}"
-BUNDLE_ID="${BUNDLE_ID:-com.dimillian.codexmonitor.ios}"
+BUNDLE_ID="${BUNDLE_ID:-com.jmcdev.opencodemonitor.ios}"
 APP_ID="${APP_ID:-}"
 IPA_PATH="${IPA_PATH:-}"
 BUILD_NUMBER="${BUILD_NUMBER:-}"
 LOCALE="${LOCALE:-en-US}"
 BETA_GROUP_NAME="${BETA_GROUP_NAME:-Beta Testers}"
-BETA_DESCRIPTION="${BETA_DESCRIPTION:-Codex Monitor iOS beta build for external testing.}"
+BETA_DESCRIPTION="${BETA_DESCRIPTION:-OpenCode Monitor iOS beta build for external testing.}"
 FEEDBACK_EMAIL="${FEEDBACK_EMAIL:-}"
 REVIEW_FIRST_NAME="${REVIEW_FIRST_NAME:-}"
 REVIEW_LAST_NAME="${REVIEW_LAST_NAME:-}"
 REVIEW_CONTACT_EMAIL="${REVIEW_CONTACT_EMAIL:-}"
 REVIEW_CONTACT_PHONE="${REVIEW_CONTACT_PHONE:-}"
-REVIEW_NOTES="${REVIEW_NOTES:-Codex Monitor iOS beta build for external testing.}"
+REVIEW_NOTES="${REVIEW_NOTES:-OpenCode Monitor iOS beta build for external testing.}"
 SKIP_BUILD=0
 SKIP_SUBMIT=0
 
@@ -42,8 +42,8 @@ Override the path with TESTFLIGHT_ENV_FILE=/path/to/file.
 
 Options:
   --app-id <id>              App Store Connect app ID (auto-resolved by bundle id if omitted)
-  --bundle-id <id>           Bundle identifier (default: com.dimillian.codexmonitor.ios)
-  --ipa <path>               IPA path (default: src-tauri/gen/apple/build/arm64/Codex Monitor.ipa)
+  --bundle-id <id>           Bundle identifier (default: com.jmcdev.opencodemonitor.ios)
+  --ipa <path>               IPA path (default: src-tauri/gen/apple/build/arm64/OpenCode Monitor.ipa)
   --target <target>          Tauri iOS target (default: aarch64)
   --build-number <number>    Build number used during archive (default: current unix timestamp)
   --skip-build               Skip Tauri archive/export step and reuse existing IPA
@@ -62,7 +62,7 @@ Review metadata (required for external submission if not already set in ASC):
 
 Examples:
   ./scripts/release_testflight_ios.sh
-  ./scripts/release_testflight_ios.sh --skip-build --ipa "src-tauri/gen/apple/build/arm64/Codex Monitor.ipa"
+  ./scripts/release_testflight_ios.sh --skip-build --ipa "src-tauri/gen/apple/build/arm64/OpenCode Monitor.ipa"
 USAGE
 }
 
@@ -229,7 +229,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
 fi
 
 if [[ -z "$IPA_PATH" ]]; then
-  IPA_PATH="src-tauri/gen/apple/build/arm64/Codex Monitor.ipa"
+  IPA_PATH="src-tauri/gen/apple/build/arm64/OpenCode Monitor.ipa"
 fi
 
 [[ -f "$IPA_PATH" ]] || fail "IPA not found at: $IPA_PATH"

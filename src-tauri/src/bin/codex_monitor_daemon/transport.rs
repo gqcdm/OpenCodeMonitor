@@ -159,7 +159,7 @@ pub(super) async fn run_orbit_mode(
     let runner_name = config
         .orbit_runner_name
         .clone()
-        .unwrap_or_else(|| "codex-monitor-daemon".to_string());
+        .unwrap_or_else(|| "opencode-monitor-daemon".to_string());
 
     let mut reconnect_delay = Duration::from_secs(1);
     loop {

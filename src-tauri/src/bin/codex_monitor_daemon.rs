@@ -99,7 +99,7 @@ use workspace_settings::apply_workspace_settings_update;
 
 const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:4732";
 const MAX_IN_FLIGHT_RPC_PER_CONNECTION: usize = 32;
-const DAEMON_NAME: &str = "codex-monitor-daemon";
+const DAEMON_NAME: &str = "opencode-monitor-daemon";
 
 fn spawn_with_client(
     event_sink: DaemonEventSink,
@@ -1435,20 +1435,28 @@ fn default_data_dir() -> PathBuf {
     if let Ok(xdg) = env::var("XDG_DATA_HOME") {
         let trimmed = xdg.trim();
         if !trimmed.is_empty() {
-            return PathBuf::from(trimmed).join("codex-monitor-daemon");
+            return PathBuf::from(trimmed).join("opencode-monitor-daemon");
         }
     }
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
         .join(".local")
         .join("share")
-        .join("codex-monitor-daemon")
+        .join("opencode-monitor-daemon")
+}
+
+fn env_var_with_fallback(primary: &str, fallback: &str) -> Option<String> {
+    env::var(primary)
+        .ok()
+        .or_else(|| env::var(fallback).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn usage() -> String {
     format!(
         "\
-USAGE:\n  codex-monitor-daemon [--listen <addr>] [--data-dir <path>] [--token <token> | --insecure-no-auth]\n  codex-monitor-daemon --orbit-url <ws-url> [--orbit-token <token>] [--orbit-auth-url <url>] [--orbit-runner-name <name>] [--data-dir <path>]\n\n\
+USAGE:\n  opencode-monitor-daemon [--listen <addr>] [--data-dir <path>] [--token <token> | --insecure-no-auth]\n  opencode-monitor-daemon --orbit-url <ws-url> [--orbit-token <token>] [--orbit-auth-url <url>] [--orbit-runner-name <name>] [--data-dir <path>]\n\n\
 OPTIONS:\n  --listen <addr>          Bind address (default: {DEFAULT_LISTEN_ADDR})\n  --data-dir <path>        Data dir holding workspaces.json/settings.json\n  --token <token>          Shared token required by TCP clients\n  --insecure-no-auth       Disable TCP auth (dev only)\n  --orbit-url <ws-url>     Run in Orbit runner mode and connect outbound to this WS URL\n  --orbit-token <token>    Orbit auth token (optional if URL already includes token)\n  --orbit-auth-url <url>   Orbit auth base URL (metadata only, optional)\n  --orbit-runner-name <n>  Runner display name (metadata only, optional)\n  -h, --help               Show this help\n"
     )
 }
@@ -1457,25 +1465,25 @@ fn parse_args() -> Result<DaemonConfig, String> {
     let mut listen = DEFAULT_LISTEN_ADDR
         .parse::<SocketAddr>()
         .map_err(|err| err.to_string())?;
-    let mut token = env::var("CODEX_MONITOR_DAEMON_TOKEN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let mut token = env_var_with_fallback(
+        "OPENCODE_MONITOR_DAEMON_TOKEN",
+        "CODEX_MONITOR_DAEMON_TOKEN",
+    );
     let mut insecure_no_auth = false;
     let mut data_dir: Option<PathBuf> = None;
     let mut orbit_url: Option<String> = None;
-    let mut orbit_token: Option<String> = env::var("CODEX_MONITOR_ORBIT_TOKEN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let mut orbit_auth_url: Option<String> = env::var("CODEX_MONITOR_ORBIT_AUTH_URL")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let mut orbit_runner_name: Option<String> = env::var("CODEX_MONITOR_ORBIT_RUNNER_NAME")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let mut orbit_token: Option<String> = env_var_with_fallback(
+        "OPENCODE_MONITOR_ORBIT_TOKEN",
+        "CODEX_MONITOR_ORBIT_TOKEN",
+    );
+    let mut orbit_auth_url: Option<String> = env_var_with_fallback(
+        "OPENCODE_MONITOR_ORBIT_AUTH_URL",
+        "CODEX_MONITOR_ORBIT_AUTH_URL",
+    );
+    let mut orbit_runner_name: Option<String> = env_var_with_fallback(
+        "OPENCODE_MONITOR_ORBIT_RUNNER_NAME",
+        "CODEX_MONITOR_ORBIT_RUNNER_NAME",
+    );
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -1547,7 +1555,7 @@ fn parse_args() -> Result<DaemonConfig, String> {
     let is_orbit_mode = orbit_url.is_some();
     if !is_orbit_mode && token.is_none() && !insecure_no_auth {
         return Err(
-            "Missing --token (or set CODEX_MONITOR_DAEMON_TOKEN). Use --insecure-no-auth for local dev only."
+            "Missing --token (or set OPENCODE_MONITOR_DAEMON_TOKEN). Use --insecure-no-auth for local dev only."
                 .to_string(),
         );
     }
@@ -1589,7 +1597,7 @@ mod tests {
             .expect("time")
             .as_nanos();
         let dir = std::env::temp_dir().join(format!(
-            "codex-monitor-{prefix}-{}-{unique}",
+            "opencode-monitor-{prefix}-{}-{unique}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
@@ -1608,7 +1616,7 @@ mod tests {
             event_sink: DaemonEventSink { tx },
             codex_login_cancels: Mutex::new(HashMap::new()),
             daemon_mode: "tcp".to_string(),
-            daemon_binary_path: Some("/tmp/codex-monitor-daemon".to_string()),
+            daemon_binary_path: Some("/tmp/opencode-monitor-daemon".to_string()),
         }
     }
 
@@ -1769,7 +1777,7 @@ fn main() {
 
         if config.orbit_url.is_some() {
             eprintln!(
-                "codex-monitor-daemon orbit mode (data dir: {})",
+                "opencode-monitor-daemon orbit mode (data dir: {})",
                 state
                     .storage_path
                     .parent()
@@ -1788,7 +1796,7 @@ fn main() {
             }
         };
         eprintln!(
-            "codex-monitor-daemon listening on {} (data dir: {})",
+            "opencode-monitor-daemon listening on {} (data dir: {})",
             config.listen,
             state
                 .storage_path

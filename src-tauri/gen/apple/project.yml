@@ -12,7 +12,7 @@ settingGroups:
     base:
       PRODUCT_NAME: OpenCode Monitor
       PRODUCT_BUNDLE_IDENTIFIER: com.jmcdev.opencodemonitor.ios
-      DEVELOPMENT_TEAM: 39X5D9F4XY
+      DEVELOPMENT_TEAM: ""
 targetTemplates:
   app:
     type: application

@@ -1,7 +1,6 @@
 /** @vitest-environment jsdom */
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as Sentry from "@sentry/react";
 import {
   sendUserMessage as sendUserMessageService,
   steerTurn as steerTurnService,
@@ -17,12 +16,6 @@ import {
 } from "@services/tauri";
 import type { WorkspaceInfo } from "@/types";
 import { useThreadMessaging } from "./useThreadMessaging";
-
-vi.mock("@sentry/react", () => ({
-  metrics: {
-    count: vi.fn(),
-  },
-}));
 
 vi.mock("@services/tauri", () => ({
   sendUserMessage: vi.fn(),
@@ -63,7 +56,7 @@ vi.mock("./useReviewPrompt", () => ({
   }),
 }));
 
-describe.skip("useThreadMessaging telemetry", () => {
+describe.skip("useThreadMessaging", () => {
   const workspace: WorkspaceInfo = {
     id: "ws-1",
     name: "Workspace",
@@ -117,7 +110,7 @@ describe.skip("useThreadMessaging telemetry", () => {
     );
   });
 
-  it("records prompt_sent once for one message send", async () => {
+  it("sends one user message for one message send", async () => {
     const { result } = renderHook(() =>
       useThreadMessaging({
         activeWorkspace: workspace,
@@ -159,19 +152,7 @@ describe.skip("useThreadMessaging telemetry", () => {
       );
     });
 
-    expect(Sentry.metrics.count).toHaveBeenCalledTimes(1);
-    expect(Sentry.metrics.count).toHaveBeenCalledWith(
-      "prompt_sent",
-      1,
-      expect.objectContaining({
-        attributes: expect.objectContaining({
-          workspace_id: "ws-1",
-          thread_id: "thread-1",
-          has_images: "false",
-          text_length: "5",
-        }),
-      }),
-    );
+    expect(sendUserMessageService).toHaveBeenCalledTimes(1);
   });
 
   it("forwards explicit app mentions to turn/start", async () => {

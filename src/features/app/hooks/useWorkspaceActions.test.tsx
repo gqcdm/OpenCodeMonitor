@@ -1,17 +1,10 @@
 /** @vitest-environment jsdom */
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as Sentry from "@sentry/react";
 import type { WorkspaceInfo } from "../../../types";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 
-vi.mock("@sentry/react", () => ({
-  metrics: {
-    count: vi.fn(),
-  },
-}));
-
-describe("useWorkspaceActions telemetry", () => {
+describe("useWorkspaceActions", () => {
   const workspace: WorkspaceInfo = {
     id: "ws-1",
     name: "Workspace",
@@ -26,7 +19,7 @@ describe("useWorkspaceActions telemetry", () => {
     vi.clearAllMocks();
   });
 
-  it("records agent_created exactly once when adding an agent", async () => {
+  it("starts a new agent draft when adding an agent", async () => {
     const setActiveThreadId = vi.fn();
     const startNewAgentDraft = vi.fn();
 
@@ -54,12 +47,5 @@ describe("useWorkspaceActions telemetry", () => {
 
     expect(setActiveThreadId).toHaveBeenCalledWith(null, "ws-1");
     expect(startNewAgentDraft).toHaveBeenCalledWith("ws-1");
-    expect(Sentry.metrics.count).toHaveBeenCalledTimes(1);
-    expect(Sentry.metrics.count).toHaveBeenCalledWith("agent_created", 1, {
-      attributes: {
-        workspace_id: "ws-1",
-        thread_id: "draft",
-      },
-    });
   });
 });

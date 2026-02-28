@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 SIMULATOR_NAME="${SIMULATOR_NAME:-iPhone Air}"
 TARGET="${TARGET:-aarch64-sim}"
-BUNDLE_ID="${BUNDLE_ID:-com.dimillian.codexmonitor.ios}"
+BUNDLE_ID="${BUNDLE_ID:-com.jmcdev.opencodemonitor.ios}"
 SKIP_BUILD=0
 CLEAN_BUILD=1
 IOS_APP_ICONSET_DIR="src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset"
@@ -20,7 +20,7 @@ Builds the iOS simulator app, installs it on a booted simulator, and launches it
 Options:
   --simulator <name>   Simulator name (default: "iPhone Air")
   --target <target>    Tauri iOS target (default: "aarch64-sim")
-  --bundle-id <id>     Bundle id to launch (default: com.dimillian.codexmonitor.ios)
+  --bundle-id <id>     Bundle id to launch (default: com.jmcdev.opencodemonitor.ios)
   --skip-build         Skip the build and only install + launch the existing app
   --no-clean           Do not remove stale src-tauri/gen/apple/build before build
   -h, --help           Show this help
@@ -123,9 +123,9 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   "$NPM_BIN" run tauri -- ios build -d -t "$TARGET" --ci
 fi
 
-APP_PATH="src-tauri/gen/apple/build/${APP_ARCH_DIR}/Codex Monitor.app"
+APP_PATH="src-tauri/gen/apple/build/${APP_ARCH_DIR}/OpenCode Monitor.app"
 if [[ ! -d "$APP_PATH" ]]; then
-  FALLBACK_APP="$(find src-tauri/gen/apple/build -maxdepth 3 -type d -name 'Codex Monitor.app' | head -n 1 || true)"
+  FALLBACK_APP="$(find src-tauri/gen/apple/build -maxdepth 3 -type d -name 'OpenCode Monitor.app' | head -n 1 || true)"
   if [[ -n "$FALLBACK_APP" ]]; then
     APP_PATH="$FALLBACK_APP"
   fi

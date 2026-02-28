@@ -1,6 +1,6 @@
 # Codebase Map (Task-Oriented)
 
-Canonical navigation guide for CodexMonitor. Use this as: "if you need X, edit Y".
+Canonical navigation guide for OpenCode Monitor. Use this as: "if you need X, edit Y".
 
 ## Start Here: How Changes Flow
 

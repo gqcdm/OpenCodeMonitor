@@ -528,7 +528,7 @@ export function SettingsServerSection({
                     id="orbit-runner-name"
                     className="settings-input settings-input--compact"
                     value={orbitRunnerNameDraft}
-                    placeholder="codex-monitor"
+                    placeholder="opencode-monitor"
                     onChange={(event) => onSetOrbitRunnerNameDraft(event.target.value)}
                     onBlur={() => {
                       void onCommitOrbitRunnerName();

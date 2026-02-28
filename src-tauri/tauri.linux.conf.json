@@ -2,7 +2,7 @@
   "app": {
     "windows": [
       {
-        "title": "Codex Monitor",
+        "title": "OpenCode Monitor",
         "width": 1200,
         "height": 700,
         "minWidth": 360,
@@ -10,7 +10,7 @@
         "titleBarStyle": "Visible",
         "hiddenTitle": false,
         "transparent": false,
-        "devtools": true,
+        "devtools": false,
         "windowEffects": null
       }
     ]

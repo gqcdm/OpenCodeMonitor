@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import * as Sentry from "@sentry/react";
 import type {
   CustomPromptOption,
   DebugEntry,
@@ -504,17 +503,7 @@ export function useThreads({
       if (!targetId) {
         return;
       }
-      const currentThreadId = state.activeThreadIdByWorkspace[targetId] ?? null;
       dispatch({ type: "setActiveThreadId", workspaceId: targetId, threadId });
-      if (threadId && currentThreadId !== threadId) {
-        Sentry.metrics.count("thread_switched", 1, {
-          attributes: {
-            workspace_id: targetId,
-            thread_id: threadId,
-            reason: "select",
-          },
-        });
-      }
       if (threadId) {
         void resumeThreadForWorkspace(targetId, threadId);
       }

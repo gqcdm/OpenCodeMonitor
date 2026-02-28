@@ -14,8 +14,8 @@
     "doctor": "sh scripts/doctor.sh",
     "doctor:strict": "sh scripts/doctor.sh --strict",
     "doctor:win": "node scripts/doctor.mjs --strict",
-    "lint": "eslint . --ext .ts,.tsx",
-    "lint:ds": "eslint . --ext .ts,.tsx",
+    "lint": "eslint src --ext .ts,.tsx",
+    "lint:ds": "eslint src --ext .ts,.tsx",
     "codemod:modal-shell": "node scripts/codemods/modal-shell-codemod.mjs",
     "codemod:panel-shell": "node scripts/codemods/panel-shell-codemod.mjs",
     "codemod:toast-shell": "node scripts/codemods/toast-shell-codemod.mjs",
@@ -37,7 +37,6 @@
   },
   "dependencies": {
     "@pierre/diffs": "^1.0.6",
-    "@sentry/react": "^10.36.0",
     "@tanstack/react-virtual": "^3.13.18",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
