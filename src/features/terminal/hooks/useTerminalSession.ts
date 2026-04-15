@@ -5,12 +5,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { DebugEntry, TerminalStatus, WorkspaceInfo } from "../../../types";
 import { buildErrorDebugEntry } from "../../../utils/debugEntries";
-import {
-  subscribeTerminalExit,
-  subscribeTerminalOutput,
-  type TerminalExitEvent,
-  type TerminalOutputEvent,
-} from "../../../services/events";
+import { currentPlatformContract } from "@/platform/current";
+import type { TerminalExitEvent, TerminalOutputEvent } from "@/platform/contract";
 import {
   openTerminalSession,
   resizeTerminalSession,
@@ -131,7 +127,6 @@ export function useTerminalSession({
   const [message, setMessage] = useState("Open a terminal to start a session.");
   const [hasSession, setHasSession] = useState(false);
   const [readyKey, setReadyKey] = useState<string | null>(null);
-  const [sessionResetCounter, setSessionResetCounter] = useState(0);
   const cleanupTerminalSession = useCallback((workspaceId: string, terminalId: string) => {
     const key = `${workspaceId}:${terminalId}`;
     outputBuffersRef.current.delete(key);
@@ -139,7 +134,6 @@ export function useTerminalSession({
     if (readyKey === key) {
       setReadyKey(null);
     }
-    setSessionResetCounter((prev) => prev + 1);
     if (activeKeyRef.current === key) {
       terminalRef.current?.reset();
       setHasSession(false);
@@ -192,7 +186,7 @@ export function useTerminalSession({
   );
 
   useEffect(() => {
-    const unlisten = subscribeTerminalOutput(
+    const unlisten = currentPlatformContract.terminal.subscribeOutput(
       (payload: TerminalOutputEvent) => {
         const { workspaceId, terminalId, data } = payload;
         const key = `${workspaceId}:${terminalId}`;
@@ -214,7 +208,7 @@ export function useTerminalSession({
   }, [onDebug, writeToTerminal]);
 
   useEffect(() => {
-    const unlisten = subscribeTerminalExit(
+    const unlisten = currentPlatformContract.terminal.subscribeExit(
       (payload: TerminalExitEvent) => {
         cleanupTerminalSession(payload.workspaceId, payload.terminalId);
         onSessionExit?.(payload.workspaceId, payload.terminalId);
@@ -350,7 +344,6 @@ export function useTerminalSession({
     onDebug,
     refreshTerminal,
     syncActiveBuffer,
-    sessionResetCounter,
   ]);
 
   useEffect(() => {
