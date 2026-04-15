@@ -3,6 +3,7 @@ import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { QueuedMessage } from "../../../types";
+import { pushErrorToast } from "../../../services/toasts";
 
 type ComposerQueueProps = {
   queuedMessages: QueuedMessage[];
@@ -15,6 +16,13 @@ export function ComposerQueue({
   onEditQueued,
   onDeleteQueued,
 }: ComposerQueueProps) {
+  const showMenuUnavailableToast = useCallback(() => {
+    pushErrorToast({
+      title: "Context menu unavailable",
+      message: "Desktop queue menus are unavailable in this environment.",
+    });
+  }, []);
+
   const handleQueueMenu = useCallback(
     async (event: React.MouseEvent, item: QueuedMessage) => {
       event.preventDefault();
@@ -28,12 +36,16 @@ export function ComposerQueue({
         text: "Delete",
         action: () => onDeleteQueued?.(item.id),
       });
-      const menu = await Menu.new({ items: [editItem, deleteItem] });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(clientX, clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({ items: [editItem, deleteItem] });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(clientX, clientY);
+        await menu.popup(position, window);
+      } catch {
+        showMenuUnavailableToast();
+      }
     },
-    [onDeleteQueued, onEditQueued],
+    [onDeleteQueued, onEditQueued, showMenuUnavailableToast],
   );
 
   if (queuedMessages.length === 0) {
@@ -58,6 +70,7 @@ export function ComposerQueue({
                 : ""}
             </span>
             <button
+              type="button"
               className="composer-queue-menu"
               onClick={(event) => handleQueueMenu(event, item)}
               aria-label="Queue item menu"
