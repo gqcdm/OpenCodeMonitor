@@ -13,6 +13,7 @@ dist-ssr
 *.local
 .testflight.local.env
 src-tauri/tauri.ios.local.conf.json
+dist-web
 
 # Editor directories and files
 .vscode/*
@@ -38,3 +39,4 @@ result
 # Project memory (agent context)
 .memory/
 .sisyphus
+.playwright-mcp

@@ -21,6 +21,7 @@
     "dev": "vite",
     "prebuild": "npm run sync:material-icons",
     "build": "tsc && vite build",
+    "build:web": "tsc && vite build --config vite.web.config.ts --mode web",
     "build:appimage": "NO_STRIP=1 tauri build --bundles appimage",
     "doctor": "sh scripts/doctor.sh",
     "doctor:strict": "sh scripts/doctor.sh --strict",
