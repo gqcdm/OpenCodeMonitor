@@ -126,4 +126,18 @@ describe("events subscriptions", () => {
 
     cleanup();
   });
+
+  it("reports synchronous listen errors through options", () => {
+    const error = new Error("sync nope");
+    vi.mocked(listen).mockImplementationOnce(() => {
+      throw error;
+    });
+
+    const onError = vi.fn();
+    const cleanup = subscribeTerminalOutput(() => {}, { onError });
+
+    expect(onError).toHaveBeenCalledWith(error);
+
+    expect(() => cleanup()).not.toThrow();
+  });
 });

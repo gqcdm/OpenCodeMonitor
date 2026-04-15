@@ -1,22 +1,17 @@
 import { listen } from "@tauri-apps/api/event";
 import type { AppServerEvent, DictationEvent, DictationModelStatus } from "../types";
+import type {
+  EventSubscriptionOptions,
+  PlatformEventStream,
+  PlatformTerminalStream,
+  TerminalExitEvent,
+  TerminalOutputEvent,
+  Unsubscribe,
+} from "@/platform/contract";
 
-export type Unsubscribe = () => void;
+export type { Unsubscribe };
 
-export type TerminalOutputEvent = {
-  workspaceId: string;
-  terminalId: string;
-  data: string;
-};
-
-export type TerminalExitEvent = {
-  workspaceId: string;
-  terminalId: string;
-};
-
-type SubscriptionOptions = {
-  onError?: (error: unknown) => void;
-};
+type SubscriptionOptions = EventSubscriptionOptions;
 
 type Listener<T> = (payload: T) => void;
 
@@ -29,15 +24,20 @@ function createEventHub<T>(eventName: string) {
     if (unlisten || listenPromise) {
       return;
     }
-    listenPromise = listen<T>(eventName, (event) => {
-      for (const listener of listeners) {
-        try {
-          listener(event.payload);
-        } catch (error) {
-          console.error(`[events] ${eventName} listener failed`, error);
+    try {
+      listenPromise = listen<T>(eventName, (event) => {
+        for (const listener of listeners) {
+          try {
+            listener(event.payload);
+          } catch (error) {
+            console.error(`[events] ${eventName} listener failed`, error);
+          }
         }
-      }
-    });
+      });
+    } catch (error) {
+      options?.onError?.(error);
+      return;
+    }
     listenPromise
       .then((handler) => {
         listenPromise = null;
@@ -118,6 +118,10 @@ export function subscribeAppServerEvents(
   return appServerHub.subscribe(onEvent, options);
 }
 
+export const desktopPlatformEventStream: PlatformEventStream = {
+  subscribeAppServer: subscribeAppServerEvents,
+};
+
 export function subscribeDictationDownload(
   onEvent: (event: DictationModelStatus) => void,
   options?: SubscriptionOptions,
@@ -145,6 +149,11 @@ export function subscribeTerminalExit(
 ): Unsubscribe {
   return terminalExitHub.subscribe(onEvent, options);
 }
+
+export const desktopPlatformTerminalStream: PlatformTerminalStream = {
+  subscribeOutput: subscribeTerminalOutput,
+  subscribeExit: subscribeTerminalExit,
+};
 
 export function subscribeUpdaterCheck(
   onEvent: () => void,
