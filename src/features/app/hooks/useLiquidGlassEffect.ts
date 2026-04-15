@@ -19,8 +19,15 @@ export function useLiquidGlassEffect({ reduceTransparency, onDebug }: Params) {
     let cancelled = false;
 
     const apply = async () => {
+      let windowHandle: ReturnType<typeof getCurrentWindow>;
+
       try {
-        const window = getCurrentWindow();
+        windowHandle = getCurrentWindow();
+      } catch {
+        return;
+      }
+
+      try {
         if (reduceTransparency) {
           if (supportedRef.current === null) {
             supportedRef.current = await isGlassSupported();
@@ -28,7 +35,7 @@ export function useLiquidGlassEffect({ reduceTransparency, onDebug }: Params) {
           if (supportedRef.current) {
             await setLiquidGlassEffect({ enabled: false });
           }
-          await window.setEffects({ effects: [] });
+          await windowHandle.setEffects({ effects: [] });
           return;
         }
 
@@ -39,7 +46,7 @@ export function useLiquidGlassEffect({ reduceTransparency, onDebug }: Params) {
           return;
         }
         if (supportedRef.current) {
-          await window.setEffects({ effects: [] });
+          await windowHandle.setEffects({ effects: [] });
           await setLiquidGlassEffect({
             enabled: true,
             cornerRadius: 16,
@@ -54,7 +61,7 @@ export function useLiquidGlassEffect({ reduceTransparency, onDebug }: Params) {
         if (!isMac && !isLinux) {
           return;
         }
-        await window.setEffects({
+        await windowHandle.setEffects({
           effects: [Effect.HudWindow],
           state: EffectState.Active,
           radius: 16,
