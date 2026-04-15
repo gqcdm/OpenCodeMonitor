@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -215,7 +215,7 @@ export const useSettingsCodexSection = ({
     setCodexArgsDraft(appSettings.codexArgs ?? "");
   }, [appSettings.codexArgs]);
 
-  const refreshOpenCodeServerStatus = async () => {
+  const refreshOpenCodeServerStatus = useCallback(async () => {
     setOpenCodeServerStatusLoading(true);
     setOpenCodeServerStatusError(null);
     try {
@@ -227,11 +227,11 @@ export const useSettingsCodexSection = ({
     } finally {
       setOpenCodeServerStatusLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void refreshOpenCodeServerStatus();
-  }, []);
+  }, [refreshOpenCodeServerStatus]);
 
   useEffect(() => {
     setCodexBinOverrideDrafts((prev) =>
@@ -260,7 +260,12 @@ export const useSettingsCodexSection = ({
     nextCodexArgs !== (appSettings.codexArgs ?? null);
 
   const handleBrowseCodex = async () => {
-    const selection = await open({ multiple: false, directory: false });
+    let selection: string | string[] | null;
+    try {
+      selection = await open({ multiple: false, directory: false });
+    } catch {
+      return;
+    }
     if (!selection || Array.isArray(selection)) {
       return;
     }
