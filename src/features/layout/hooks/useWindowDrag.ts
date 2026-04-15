@@ -12,7 +12,11 @@ export function useWindowDrag(targetId: string) {
       if (event.buttons !== 1) {
         return;
       }
-      getCurrentWindow().startDragging();
+      try {
+        void getCurrentWindow().startDragging();
+      } catch {
+        // In non-Tauri environments, dragging is unavailable.
+      }
     };
 
     el.addEventListener("mousedown", handler);
