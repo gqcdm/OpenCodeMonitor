@@ -4,7 +4,7 @@ import type {
   ApprovalRequest,
   RequestUserInputRequest,
 } from "../../../types";
-import { subscribeAppServerEvents } from "../../../services/events";
+import { currentPlatformContract } from "@/platform/current";
 import {
   getAppServerParams,
   getAppServerRawMethod,
@@ -134,7 +134,7 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
   });
 
   useEffect(() => {
-    const unlisten = subscribeAppServerEvents((payload) => {
+    const unlisten = currentPlatformContract.events.subscribeAppServer((payload) => {
       const currentHandlers = handlersRef.current;
       currentHandlers.onAppServerEvent?.(payload);
 

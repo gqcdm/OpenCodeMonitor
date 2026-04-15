@@ -3,11 +3,15 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerEvent } from "../../../types";
-import { subscribeAppServerEvents } from "../../../services/events";
+import { currentPlatformContract } from "@/platform/current";
 import { useAppServerEvents } from "./useAppServerEvents";
 
-vi.mock("../../../services/events", () => ({
-  subscribeAppServerEvents: vi.fn(),
+vi.mock("@/platform/current", () => ({
+  currentPlatformContract: {
+    events: {
+      subscribeAppServer: vi.fn(),
+    },
+  },
 }));
 
 type Handlers = Parameters<typeof useAppServerEvents>[0];
@@ -23,7 +27,7 @@ const unlisten = vi.fn();
 beforeEach(() => {
   listener = null;
   unlisten.mockReset();
-  vi.mocked(subscribeAppServerEvents).mockImplementation((cb) => {
+  vi.mocked(currentPlatformContract.events.subscribeAppServer).mockImplementation((cb) => {
     listener = cb;
     return unlisten;
   });
