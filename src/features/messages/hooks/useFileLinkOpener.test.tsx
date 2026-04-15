@@ -3,12 +3,12 @@ import { renderHook } from "@testing-library/react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-const menuNew = vi.hoisted(() =>
+const menuNew = vi.hoisted(() => vi.fn(async () => ({ popup: vi.fn() })));
+const menuItemNew = vi.hoisted(() =>
   vi.fn(async () => {
-    throw new Error("no tauri menu");
+    throw new Error("no tauri menu item");
   }),
 );
-const menuItemNew = vi.hoisted(() => vi.fn(async (options) => options));
 const predefinedMenuItemNew = vi.hoisted(() => vi.fn(async (options) => options));
 
 vi.mock("@tauri-apps/api/menu", () => ({

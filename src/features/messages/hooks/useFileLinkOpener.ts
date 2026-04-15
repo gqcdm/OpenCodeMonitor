@@ -159,57 +159,57 @@ export function useFileLinkOpener(
             : appName
               ? `Open in ${appName}`
               : "Set app name in Settings";
-      const items = [
-        await MenuItem.new({
-          text: openLabel,
-          enabled: canOpen,
-          action: async () => {
-            await openFileLink(rawPath);
-          },
-        }),
-        ...(target.kind === "finder"
-          ? []
-          : [
-              await MenuItem.new({
-                text: revealInFileManagerLabel(),
-                action: async () => {
-                  try {
-                    await revealItemInDir(resolvedPath);
-                  } catch (error) {
-                    reportOpenError(error, {
-                      rawPath,
-                      resolvedPath,
-                      workspacePath,
-                      targetId: target.id,
-                      targetKind: "finder",
-                      targetAppName: null,
-                      targetCommand: null,
-                    });
-                  }
-                },
-              }),
-            ]),
-        await MenuItem.new({
-          text: "Download Linked File",
-          enabled: false,
-        }),
-        await MenuItem.new({
-          text: "Copy Link",
-          action: async () => {
-            const link =
-              resolvedPath.startsWith("/") ? `file://${resolvedPath}` : resolvedPath;
-            try {
-              await navigator.clipboard.writeText(link);
-            } catch {
-              // Clipboard failures are non-fatal here.
-            }
-          },
-        }),
-        await PredefinedMenuItem.new({ item: "Separator" }),
-        await PredefinedMenuItem.new({ item: "Services" }),
-      ];
-
       try {
+        const items = [
+          await MenuItem.new({
+            text: openLabel,
+            enabled: canOpen,
+            action: async () => {
+              await openFileLink(rawPath);
+            },
+          }),
+          ...(target.kind === "finder"
+            ? []
+            : [
+                await MenuItem.new({
+                  text: revealInFileManagerLabel(),
+                  action: async () => {
+                    try {
+                      await revealItemInDir(resolvedPath);
+                    } catch (error) {
+                      reportOpenError(error, {
+                        rawPath,
+                        resolvedPath,
+                        workspacePath,
+                        targetId: target.id,
+                        targetKind: "finder",
+                        targetAppName: null,
+                        targetCommand: null,
+                      });
+                    }
+                  },
+                }),
+              ]),
+          await MenuItem.new({
+            text: "Download Linked File",
+            enabled: false,
+          }),
+          await MenuItem.new({
+            text: "Copy Link",
+            action: async () => {
+              const link =
+                resolvedPath.startsWith("/") ? `file://${resolvedPath}` : resolvedPath;
+              try {
+                await navigator.clipboard.writeText(link);
+              } catch {
+                // Clipboard failures are non-fatal here.
+              }
+            },
+          }),
+          await PredefinedMenuItem.new({ item: "Separator" }),
+          await PredefinedMenuItem.new({ item: "Services" }),
+        ];
+
         const menu = await Menu.new({ items });
         const window = getCurrentWindow();
         const position = new LogicalPosition(event.clientX, event.clientY);
