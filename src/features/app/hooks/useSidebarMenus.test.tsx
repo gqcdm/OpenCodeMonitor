@@ -102,8 +102,8 @@ describe("useSidebarMenus", () => {
   });
 
   it("shows a toast when desktop menus are unavailable", async () => {
-    menuNew.mockImplementationOnce(async () => {
-      throw new Error("no tauri menu");
+    menuItemNew.mockImplementationOnce(async () => {
+      throw new Error("no tauri menu item");
     });
 
     const { result } = renderHook(() =>
