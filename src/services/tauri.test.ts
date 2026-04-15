@@ -142,6 +142,14 @@ describe("tauri invoke wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("list_workspaces");
   });
 
+  it("returns an empty list when list_workspaces resolves to null", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockResolvedValueOnce(null);
+
+    await expect(listWorkspaces()).resolves.toEqual([]);
+    expect(invokeMock).toHaveBeenCalledWith("list_workspaces");
+  });
+
   it("applies default limit for git log", async () => {
     const invokeMock = vi.mocked(invoke);
     invokeMock.mockResolvedValueOnce({

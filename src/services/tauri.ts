@@ -76,7 +76,8 @@ export async function pickImageFiles(): Promise<string[]> {
 
 export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
   try {
-    return await invoke<WorkspaceInfo[]>("list_workspaces");
+    const result = await invoke<WorkspaceInfo[] | null>("list_workspaces");
+    return Array.isArray(result) ? result : [];
   } catch (error) {
     if (isMissingTauriInvokeError(error)) {
       // In non-Tauri environments (e.g., Electron/web previews), the invoke

@@ -103,8 +103,11 @@ function buildDefaultSettings(): AppSettings {
 }
 
 function normalizeAppSettings(settings: AppSettings): AppSettings {
+  const workspaceGroups = Array.isArray(settings.workspaceGroups)
+    ? settings.workspaceGroups
+    : [];
   const normalizedTargets =
-    settings.openAppTargets && settings.openAppTargets.length
+    Array.isArray(settings.openAppTargets) && settings.openAppTargets.length
       ? normalizeOpenAppTargets(settings.openAppTargets)
       : DEFAULT_OPEN_APP_TARGETS;
   const storedOpenAppId =
@@ -148,6 +151,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     reviewDeliveryMode:
       settings.reviewDeliveryMode === "detached" ? "detached" : "inline",
     commitMessagePrompt,
+    workspaceGroups,
     openAppTargets: normalizedTargets,
     selectedOpenAppId,
   };

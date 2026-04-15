@@ -57,6 +57,26 @@ describe("useAppSettings", () => {
     expect(result.current.settings.remoteBackendHost).toBe("example:1234");
   });
 
+  it("normalizes null workspace groups and open app targets", async () => {
+    getAppSettingsMock.mockResolvedValue(
+      ({
+        workspaceGroups: null,
+        openAppTargets: null,
+        selectedOpenAppId: "missing-id",
+      } as unknown) as AppSettings,
+    );
+
+    const { result } = renderHook(() => useAppSettings());
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.settings.workspaceGroups).toEqual([]);
+    expect(result.current.settings.openAppTargets.length).toBeGreaterThan(0);
+    expect(result.current.settings.selectedOpenAppId).toBe(
+      result.current.settings.openAppTargets[0]?.id,
+    );
+  });
+
   it("keeps defaults when getAppSettings fails", async () => {
     getAppSettingsMock.mockRejectedValue(new Error("boom"));
 

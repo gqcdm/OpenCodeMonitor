@@ -1020,8 +1020,9 @@ function MainApp() {
   const resolveCloneProjectContext = useCallback(
     (workspace: WorkspaceInfo) => {
       const groupId = workspace.settings.groupId ?? null;
+      const workspaceGroups = appSettings.workspaceGroups ?? [];
       const group = groupId
-        ? appSettings.workspaceGroups.find((entry) => entry.id === groupId)
+        ? workspaceGroups.find((entry) => entry.id === groupId)
         : null;
       return {
         groupId,
@@ -1055,9 +1056,10 @@ function MainApp() {
 
   const persistProjectCopiesFolder = useCallback(
     async (groupId: string, copiesFolder: string) => {
+      const workspaceGroups = appSettings.workspaceGroups ?? [];
       await queueSaveSettings({
         ...appSettings,
-        workspaceGroups: appSettings.workspaceGroups.map((entry) =>
+        workspaceGroups: workspaceGroups.map((entry) =>
           entry.id === groupId ? { ...entry, copiesFolder } : entry,
         ),
       });
