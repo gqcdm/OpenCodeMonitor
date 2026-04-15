@@ -24,16 +24,21 @@ function start(options?: SubscriptionOptions) {
   if (unlisten || listenPromise) {
     return;
   }
-  listenPromise = getCurrentWindow()
-    .onDragDropEvent((event) => {
-      for (const listener of listeners) {
-        try {
-          listener(event as DragDropEvent);
-        } catch (error) {
-          console.error("[drag-drop] listener failed", error);
+  try {
+    listenPromise = getCurrentWindow()
+      .onDragDropEvent((event) => {
+        for (const listener of listeners) {
+          try {
+            listener(event as DragDropEvent);
+          } catch (error) {
+            console.error("[drag-drop] listener failed", error);
+          }
         }
-      }
-    }) as Promise<() => void>;
+      }) as Promise<() => void>;
+  } catch (error) {
+    options?.onError?.(error);
+    return;
+  }
   listenPromise
     .then((handler) => {
       listenPromise = null;
