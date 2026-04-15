@@ -3,12 +3,12 @@ import { fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ComposerQueue } from "./ComposerQueue";
 
-const menuNew = vi.hoisted(() =>
+const menuNew = vi.hoisted(() => vi.fn(async () => ({ popup: vi.fn() })));
+const menuItemNew = vi.hoisted(() =>
   vi.fn(async () => {
-    throw new Error("no tauri menu");
+    throw new Error("no tauri menu item");
   }),
 );
-const menuItemNew = vi.hoisted(() => vi.fn(async (options) => options));
 
 vi.mock("@tauri-apps/api/menu", () => ({
   Menu: { new: menuNew },

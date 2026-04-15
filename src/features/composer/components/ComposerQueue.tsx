@@ -28,15 +28,15 @@ export function ComposerQueue({
       event.preventDefault();
       event.stopPropagation();
       const { clientX, clientY } = event;
-      const editItem = await MenuItem.new({
-        text: "Edit",
-        action: () => onEditQueued?.(item),
-      });
-      const deleteItem = await MenuItem.new({
-        text: "Delete",
-        action: () => onDeleteQueued?.(item.id),
-      });
       try {
+        const editItem = await MenuItem.new({
+          text: "Edit",
+          action: () => onEditQueued?.(item),
+        });
+        const deleteItem = await MenuItem.new({
+          text: "Delete",
+          action: () => onDeleteQueued?.(item.id),
+        });
         const menu = await Menu.new({ items: [editItem, deleteItem] });
         const window = getCurrentWindow();
         const position = new LogicalPosition(clientX, clientY);
