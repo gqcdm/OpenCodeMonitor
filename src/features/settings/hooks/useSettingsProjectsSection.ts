@@ -132,7 +132,12 @@ export const useSettingsProjectsSection = ({
   };
 
   const handleChooseGroupCopiesFolder = async (group: WorkspaceGroup) => {
-    const selection = await open({ multiple: false, directory: true });
+    let selection: string | string[] | null;
+    try {
+      selection = await open({ multiple: false, directory: true });
+    } catch {
+      return;
+    }
     if (!selection || Array.isArray(selection)) {
       return;
     }
@@ -153,12 +158,17 @@ export const useSettingsProjectsSection = ({
       groupProjects.length > 0
         ? `\n\nProjects in this group will move to "${ungroupedLabel}".`
         : "";
-    const confirmed = await ask(`Delete "${group.name}"?${detail}`, {
-      title: "Delete Group",
-      kind: "warning",
-      okLabel: "Delete",
-      cancelLabel: "Cancel",
-    });
+    let confirmed = false;
+    try {
+      confirmed = await ask(`Delete "${group.name}"?${detail}`, {
+        title: "Delete Group",
+        kind: "warning",
+        okLabel: "Delete",
+        cancelLabel: "Cancel",
+      });
+    } catch {
+      return;
+    }
     if (!confirmed) {
       return;
     }
