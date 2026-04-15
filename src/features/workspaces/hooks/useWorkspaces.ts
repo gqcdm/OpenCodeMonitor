@@ -779,15 +779,20 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
           } on disk.`
         : "";
 
-    const confirmed = await ask(
-      `Are you sure you want to delete "${workspaceName}"?\n\nThis will remove the workspace from OpenCode Monitor.${detail}`,
-      {
-        title: "Delete Workspace",
-        kind: "warning",
-        okLabel: "Delete",
-        cancelLabel: "Cancel",
-      },
-    );
+    let confirmed = false;
+    try {
+      confirmed = await ask(
+        `Are you sure you want to delete "${workspaceName}"?\n\nThis will remove the workspace from OpenCode Monitor.${detail}`,
+        {
+          title: "Delete Workspace",
+          kind: "warning",
+          okLabel: "Delete",
+          cancelLabel: "Cancel",
+        },
+      );
+    } catch {
+      return;
+    }
 
     if (!confirmed) {
       return;
@@ -820,10 +825,14 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
         label: "workspace/remove error",
         payload: errorMessage,
       });
-      void message(errorMessage, {
-        title: "Delete workspace failed",
-        kind: "error",
-      });
+      try {
+        void message(errorMessage, {
+          title: "Delete workspace failed",
+          kind: "error",
+        });
+      } catch {
+        // Ignore dialog failures outside Tauri.
+      }
     }
   }
 
@@ -831,15 +840,20 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
     const workspace = workspaces.find((entry) => entry.id === workspaceId);
     const workspaceName = workspace?.name || "this worktree";
 
-    const confirmed = await ask(
-      `Are you sure you want to delete "${workspaceName}"?\n\nThis will close the agent, remove its worktree, and delete it from OpenCode Monitor.`,
-      {
-        title: "Delete Worktree",
-        kind: "warning",
-        okLabel: "Delete",
-        cancelLabel: "Cancel",
-      },
-    );
+    let confirmed = false;
+    try {
+      confirmed = await ask(
+        `Are you sure you want to delete "${workspaceName}"?\n\nThis will close the agent, remove its worktree, and delete it from OpenCode Monitor.`,
+        {
+          title: "Delete Worktree",
+          kind: "warning",
+          okLabel: "Delete",
+          cancelLabel: "Cancel",
+        },
+      );
+    } catch {
+      return;
+    }
 
     if (!confirmed) {
       return;
@@ -870,10 +884,14 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
         label: "worktree/remove error",
         payload: errorMessage,
       });
-      void message(errorMessage, {
-        title: "Delete worktree failed",
-        kind: "error",
-      });
+      try {
+        void message(errorMessage, {
+          title: "Delete worktree failed",
+          kind: "error",
+        });
+      } catch {
+        // Ignore dialog failures outside Tauri.
+      }
     } finally {
       setDeletingWorktreeIds((prev) => {
         const next = new Set(prev);

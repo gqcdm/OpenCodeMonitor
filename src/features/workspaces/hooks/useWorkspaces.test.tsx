@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { message } from "@tauri-apps/plugin-dialog";
+import { ask, message } from "@tauri-apps/plugin-dialog";
 import type { WorkspaceInfo } from "../../../types";
 import {
   addWorkspace,
   isWorkspacePathDir,
   listWorkspaces,
   pickWorkspacePaths,
+  removeWorkspace,
+  removeWorktree,
   renameWorktree,
   renameWorktreeUpstream,
   updateWorkspaceSettings,
@@ -347,5 +349,41 @@ describe("useWorkspaces workspaceGroups normalization", () => {
     expect(result.current.groupedWorkspaces).toHaveLength(1);
     expect(result.current.groupedWorkspaces[0]?.workspaces).toHaveLength(1);
     expect(result.current.groupedWorkspaces[0]?.workspaces[0]?.id).toBe("ws-1");
+  });
+});
+
+describe("useWorkspaces delete dialog guards", () => {
+  it("treats unavailable workspace delete dialogs as a no-op", async () => {
+    vi.mocked(listWorkspaces).mockResolvedValue([workspaceOne]);
+    vi.mocked(ask).mockRejectedValueOnce(new Error("no tauri dialog"));
+
+    const { result } = renderHook(() => useWorkspaces());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.removeWorkspace(workspaceOne.id);
+    });
+
+    expect(removeWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("treats unavailable worktree delete dialogs as a no-op", async () => {
+    vi.mocked(listWorkspaces).mockResolvedValue([worktree]);
+    vi.mocked(ask).mockRejectedValueOnce(new Error("no tauri dialog"));
+
+    const { result } = renderHook(() => useWorkspaces());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.removeWorktree(worktree.id);
+    });
+
+    expect(removeWorktree).not.toHaveBeenCalled();
   });
 });
