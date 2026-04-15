@@ -317,6 +317,43 @@ pub(crate) struct TailscaleDaemonCommandPreview {
     pub(crate) token_configured: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum PlatformRole {
+    Admin,
+    Member,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthSessionUserDto {
+    pub(crate) id: String,
+    pub(crate) username: String,
+    pub(crate) role: PlatformRole,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthSessionDto {
+    pub(crate) session_id: String,
+    pub(crate) user: AuthSessionUserDto,
+    pub(crate) issued_at: String,
+    pub(crate) expires_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthLoginRequestDto {
+    pub(crate) username: String,
+    pub(crate) password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthLoginResponseDto {
+    pub(crate) session: AuthSessionDto,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct BranchInfo {
     pub(crate) name: String,

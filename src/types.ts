@@ -65,6 +65,30 @@ export type AppServerEvent = {
   message: Record<string, unknown>;
 };
 
+export type PlatformRole = "admin" | "member";
+
+export type AuthSessionUserDto = {
+  id: string;
+  username: string;
+  role: PlatformRole;
+};
+
+export type AuthSessionDto = {
+  sessionId: string;
+  user: AuthSessionUserDto;
+  issuedAt: string;
+  expiresAt: string;
+};
+
+export type AuthLoginRequestDto = {
+  username: string;
+  password: string;
+};
+
+export type AuthLoginResponseDto = {
+  session: AuthSessionDto;
+};
+
 export type Message = {
   id: string;
   role: "user" | "assistant";
