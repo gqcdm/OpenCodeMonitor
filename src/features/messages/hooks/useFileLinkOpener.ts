@@ -129,6 +129,13 @@ export function useFileLinkOpener(
     [openTargets, reportOpenError, selectedOpenAppId, workspacePath],
   );
 
+  const reportMenuUnavailable = useCallback(() => {
+    pushErrorToast({
+      title: "Context menu unavailable",
+      message: "Desktop file menus are unavailable in this environment.",
+    });
+  }, []);
+
   const showFileLinkMenu = useCallback(
     async (event: MouseEvent, rawPath: string) => {
       event.preventDefault();
@@ -202,12 +209,23 @@ export function useFileLinkOpener(
         await PredefinedMenuItem.new({ item: "Services" }),
       ];
 
-      const menu = await Menu.new({ items });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(event.clientX, event.clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({ items });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(event.clientX, event.clientY);
+        await menu.popup(position, window);
+      } catch {
+        reportMenuUnavailable();
+      }
     },
-    [openFileLink, openTargets, reportOpenError, selectedOpenAppId, workspacePath],
+    [
+      openFileLink,
+      openTargets,
+      reportMenuUnavailable,
+      reportOpenError,
+      selectedOpenAppId,
+      workspacePath,
+    ],
   );
 
   return { openFileLink, showFileLinkMenu };
