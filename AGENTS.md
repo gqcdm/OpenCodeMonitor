@@ -1,166 +1,113 @@
 # OpenCodeMonitor Agent Guide
 
-All docs must be canonical, with no past commentary, only live state.
+Canonical instructions only. Describe current truth, not history.
 
-## Scope
+## Overview
 
-This file is the agent contract for how to work in this repo.
-Detailed navigation/runbooks live in:
+OpenCodeMonitor is a Tauri desktop app for monitoring and interacting with OpenCode agents across local workspaces.
+It preserves CodexMonitor-shaped frontend contracts while confining OpenCode REST/SSE adaptation to a narrow Rust layer.
 
-- `docs/codebase-map.md` (task-oriented file map: "if you need X, edit Y")
-- `README.md` (setup, build, release, and broader project docs)
-- `docs/shaping/rest-api-migration.md` (REST backend architecture and parity status)
+Generated: 2026-04-15 Asia/Shanghai
+Commit: 37cd863
+Branch: main
 
-## Project Purpose
+## Structure
 
-OpenCodeMonitor is a fork of [CodexMonitor](https://github.com/Dimillian/CodexMonitor) — a Tauri desktop app that orchestrates coding agents across local workspaces. The fork replaces the Codex CLI backend with [OpenCode](https://opencode.ai) and translates between OpenCode's protocol and the original CodexMonitor frontend event shapes.
+```text
+.
+├── src/                     # React frontend
+│   ├── features/app/        # shell bootstrap, orchestration, layout wiring
+│   ├── features/threads/    # thread state machine and event handling
+│   ├── features/settings/   # settings surface and orchestration
+│   ├── features/git/        # git/github UI workflows
+│   └── features/workspaces/ # workspace/worktree UI flows
+├── src-tauri/src/shared/    # backend source of truth across app and daemon
+├── src-tauri/src/backend/   # OpenCode server lifecycle + event translation
+├── src-tauri/src/bin/codex_monitor_daemon/ # daemon runtime + RPC surface
+├── docs/                    # canonical navigation and architecture docs
+└── scripts/                 # doctor checks and codemods
+```
 
-We pull upstream CodexMonitor changes regularly (weekly/monthly). The fork's translation layer is isolated to three Rust files so frontend merges stay clean.
+## Where To Look
 
-## Architecture
+| Task | Location | Notes |
+| --- | --- | --- |
+| Frontend composition and shell wiring | `src/App.tsx`, `src/features/app/*` | `App.tsx` is heavy composition root; move stateful logic into hooks/orchestration |
+| Thread lifecycle, reducer, event routing | `src/features/threads/*` | Thread state is a local state machine; preserve event ordering invariants |
+| Settings flow and persistence wiring | `src/features/settings/*`, `src/services/tauri.ts`, `src-tauri/src/shared/settings_core.rs` | Keep TS/Rust contracts aligned |
+| Workspace/worktree behavior | `src/features/workspaces/*`, `src-tauri/src/shared/workspaces_core*` | Shared core first; app/daemon adapters second |
+| Git/GitHub UI behavior | `src/features/git/*`, `src-tauri/src/shared/git_ui_core*`, `src-tauri/src/shared/git_core.rs` | Frontend and Rust layers both participate |
+| Frontend IPC calls | `src/services/tauri.ts` | Only place frontend should invoke Tauri commands |
+| Frontend event fanout | `src/services/events.ts` | Single-listener hub; do not scatter subscriptions |
+| Tauri app command surface | `src-tauri/src/lib.rs` | Match any new backend command across IPC and tests |
+| OpenCode server lifecycle and event translation | `src-tauri/src/backend/*` | Translation stays in Rust, never frontend |
+| Daemon RPC surface | `src-tauri/src/bin/codex_monitor_daemon/*` | Keep RPC methods/payloads aligned with app surface |
 
-- Frontend: React + Vite (`src/`)
-- Backend app: Tauri Rust process (`src-tauri/src/lib.rs`)
-- Backend daemon: JSON-RPC process (`src-tauri/src/bin/codex_monitor_daemon.rs`)
-- Shared backend source of truth: `src-tauri/src/shared/*`
-- Protocol event translation: `src-tauri/src/backend/event_translator.rs`
+## Code Map
 
-### Core Design Invariant
+| Area | Entry | Role |
+| --- | --- | --- |
+| Browser bootstrap | `src/main.tsx` | Mounts `App` and handles mobile viewport/bootstrap quirks |
+| Frontend shell | `src/App.tsx` | Global composition, layout wiring, orchestration handoff |
+| App bootstrap | `src/features/app/bootstrap/useAppBootstrap.ts` | Settings, dictation, debug, liquid-glass boot sequence |
+| Thread reducer | `src/features/threads/hooks/useThreadsReducer.ts` | Local thread state machine and slice dispatch |
+| App command registry | `src-tauri/src/lib.rs` | Tauri invoke handler and desktop runtime setup |
+| Shared backend core | `src-tauri/src/shared/mod.rs` | Cross-runtime source of truth |
+| Server/runtime adapter | `src-tauri/src/backend/app_server.rs` | `opencode serve` lifecycle, SSE routing, session spawn |
+| Event translation | `src-tauri/src/backend/event_translator.rs` | OpenCode events -> CodexMonitor-shaped frontend events |
+| Daemon entrypoint | `src-tauri/src/bin/codex_monitor_daemon.rs` | Remote runtime wiring |
+| Daemon RPC | `src-tauri/src/bin/codex_monitor_daemon/rpc.rs` | JSON-RPC dispatch, notifications, response shaping |
 
-The frontend thread reducer receives events in the **same shape** as original CodexMonitor. All OpenCode-to-CodexMonitor translation happens in Rust, never in the frontend.
+## Repo-Wide Rules
 
-### Backend: REST API
+1. All OpenCode protocol translation happens in Rust, never in the frontend.
+2. Shared/domain backend logic goes in `src-tauri/src/shared/*` first.
+3. Keep app and daemon thin adapters around shared cores.
+4. Preserve JSON-RPC method names and payload shapes unless intentionally changing contracts.
+5. Do not rename internal `codex_*` Rust module paths just to match product wording.
+6. Keep frontend Tauri calls in `src/services/tauri.ts` and event fanout in `src/services/events.ts`.
+7. Keep Rust and TypeScript contracts synchronized: `src-tauri/src/types.rs` <-> `src/types.ts`.
 
-The backend uses `opencode serve` (HTTP REST + SSE). The translation layer is isolated to three Rust files so frontend merges stay clean:
+## Frontend Rules
 
-- `src-tauri/src/backend/event_translator.rs` — protocol events to CodexMonitor event shapes
-- `src-tauri/src/shared/codex_core.rs` — all protocol methods
-- `src-tauri/src/backend/app_server.rs` — process spawn, event routing
-
-Internal Rust module paths (`codex_core.rs`, `codex/mod.rs`, etc.) are **not renamed** — only user-facing strings. This minimizes merge conflicts with upstream. (The original CodexMonitor used Codex CLI; this fork uses OpenCode REST instead.)
-
-## Non-Negotiable Architecture Rules
-
-1. Put shared/domain backend logic in `src-tauri/src/shared/*` first.
-2. Keep app and daemon as thin adapters around shared cores.
-3. Do not duplicate logic between app and daemon.
-4. Keep JSON-RPC method names and payload shapes stable unless intentionally changing contracts.
-5. Keep frontend IPC contracts in sync with backend command surfaces.
-6. All OpenCode protocol translation happens in Rust — never in the frontend.
-
-## Backend Routing Rules
-
-For backend behavior changes, follow this order:
-
-1. Shared core (`src-tauri/src/shared/*`) when behavior is cross-runtime.
-2. App adapter and Tauri command surface (`src-tauri/src/lib.rs` + adapter module).
-3. Frontend IPC wrapper (`src/services/tauri.ts`).
-4. Daemon RPC surface (`src-tauri/src/bin/codex_monitor_daemon/rpc.rs` + `rpc/*`).
-
-If you add a backend command, update all relevant layers and tests.
-
-## Frontend Routing Rules
-
-- Keep `src/App.tsx` as composition/wiring root.
-- Move stateful orchestration into:
-  - `src/features/app/hooks/*`
-  - `src/features/app/bootstrap/*`
-  - `src/features/app/orchestration/*`
+- `src/App.tsx` is composition root, not a dumping ground for new domain logic.
+- Move stateful orchestration into `src/features/app/hooks/*`, `bootstrap/*`, or `orchestration/*`.
 - Keep presentational UI in feature components.
-- Keep Tauri calls in `src/services/tauri.ts` only.
-- Keep event subscription fanout in `src/services/events.ts`.
+- Use import aliases: `@/*`, `@app/*`, `@settings/*`, `@threads/*`, `@services/*`, `@utils/*`.
 
-## Import Aliases
+## Backend Rules
 
-Use project aliases for frontend imports:
+- Backend changes that can run remotely must respect app/daemon parity.
+- New backend commands require updates across shared core, app surface, frontend IPC, daemon RPC, and tests.
+- If event payload format changes, update parser/guards in `src/utils/appServerEvents.ts` first.
 
-- `@/*` -> `src/*`
-- `@app/*` -> `src/features/app/*`
-- `@settings/*` -> `src/features/settings/*`
-- `@threads/*` -> `src/features/threads/*`
-- `@services/*` -> `src/services/*`
-- `@utils/*` -> `src/utils/*`
+## Design System Rules
 
-## Key File Anchors
+- Reuse existing design-system primitives and tokens for shared shell chrome.
+- Do not reintroduce duplicated modal/toast/panel/popover shell styling in feature CSS.
+- Prefer codemods and DS primitives over ad-hoc shell markup.
 
-- Frontend composition root: `src/App.tsx`
-- Frontend IPC wrapper: `src/services/tauri.ts`
-- Frontend event hub: `src/services/events.ts`
-- App command registry: `src-tauri/src/lib.rs`
-- Daemon entrypoint: `src-tauri/src/bin/codex_monitor_daemon.rs`
-- Daemon RPC router: `src-tauri/src/bin/codex_monitor_daemon/rpc.rs`
-- Shared workspaces core: `src-tauri/src/shared/workspaces_core.rs` + `src-tauri/src/shared/workspaces_core/*`
-- Shared git UI core: `src-tauri/src/shared/git_ui_core.rs` + `src-tauri/src/shared/git_ui_core/*`
-- Protocol event translator: `src-tauri/src/backend/event_translator.rs`
-- Protocol methods: `src-tauri/src/shared/codex_core.rs`
-- Process spawn + event routing: `src-tauri/src/backend/app_server.rs`
-- Threads reducer entrypoint: `src/features/threads/hooks/useThreadsReducer.ts`
-- Threads reducer slices: `src/features/threads/hooks/threadReducer/*`
-
-For broader path maps, use `docs/codebase-map.md`.
-
-## App/Daemon Parity Checklist
-
-When changing backend behavior that can run remotely:
-
-1. Shared core logic updated (or explicitly app-only/daemon-only).
-2. App surface updated (`src-tauri/src/lib.rs` + adapter).
-3. Frontend IPC updated (`src/services/tauri.ts`) when needed.
-4. Daemon RPC updated (`rpc.rs` + `rpc/*`) when needed.
-5. Contract/test coverage updated.
-
-## Design System Rule (High-Level)
-
-Use existing design-system primitives and tokens for shared shell chrome.
-Do not reintroduce duplicated modal/toast/panel/popover shell styling in feature CSS.
-
-(See existing DS files and lint guardrails for implementation details.)
-
-## Safety and Git Behavior
-
-- Prefer safe git operations (`status`, `diff`, `log`).
-- Do not reset/revert unrelated user changes.
-- If unrelated changes appear, continue focusing on owned files unless they block correctness.
-- If conflicts impact correctness, call them out and choose the safest path.
-- Fix root cause, not band-aids.
-
-## Validation Matrix
-
-Run validations based on touched areas:
-
-- Always: `npm run typecheck`
-- Frontend behavior/state/hooks/components: `npm run test`
-- Rust backend changes: `cd src-tauri && cargo check`
-- Use targeted tests for touched modules before full-suite runs when iterating.
-
-## Quick Runbook
-
-Core local commands (keep these inline for daily use):
+## Validation
 
 ```bash
 npm install
 npm run doctor:strict
-npm run tauri:dev
-npm run test
+npm run lint
 npm run typecheck
+npm run test
 cd src-tauri && cargo check
+cd src-tauri && cargo test
 ```
 
-Release build:
+Release/local app build:
 
 ```bash
 npm run tauri:build
 ```
 
-Focused test runs:
-
-```bash
-npm run test -- <path-to-test-file>
-```
+Windows Tauri build depends on `npm run doctor:win` and LLVM/clang.
 
 ## Hotspots
-
-Use extra care in high-churn/high-complexity files:
 
 - `src/App.tsx`
 - `src/features/settings/components/SettingsView.tsx`
@@ -174,12 +121,13 @@ Use extra care in high-churn/high-complexity files:
 
 ## Canonical References
 
-- Task-oriented code map: `docs/codebase-map.md`
-- Setup/build/release/test commands: `README.md`
-- REST backend architecture: `docs/shaping/rest-api-migration.md`
-- Frontend event contract: `docs/app-server-events.md`
-- For OpenCode API/feature changes, refer to `opencode-server-api.mdx` and `./tmp/opencode` before implementing protocol or behavior updates.
+- `README.md` - setup, release, validation
+- `docs/codebase-map.md` - task-oriented navigation
+- `docs/app-server-events.md` - frontend event contract and ordering invariants
+- `docs/shaping/rest-api-migration.md` - backend migration and parity notes
+- `opencode-server-api.mdx` and `tmp/opencode` - OpenCode API references before protocol changes
 
-## Project Memory
+## Notes
 
-Load project memory: read .memory/SUMMARY.md before starting work. If .memory/ doesn't exist, initialize it per the project-memory skill.
+- `.memory/SUMMARY.md` is referenced but currently absent; do not assume project memory exists.
+- Child `AGENTS.md` files define local exceptions and workflow details. Keep them short and avoid repeating this file.
