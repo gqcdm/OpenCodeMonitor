@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "../../../types";
 import { useSidebarMenus } from "./useSidebarMenus";
 import { fileManagerName } from "../../../utils/platformPaths";
+import { pushErrorToast } from "../../../services/toasts";
 
 const menuNew = vi.hoisted(() =>
   vi.fn(async ({ items }) => ({ popup: vi.fn(), items })),
@@ -98,5 +99,41 @@ describe("useSidebarMenus", () => {
     expect(revealItem).toBeDefined();
     await revealItem.action();
     expect(revealItemInDir).toHaveBeenCalledWith("/tmp/worktree-1");
+  });
+
+  it("shows a toast when desktop menus are unavailable", async () => {
+    menuNew.mockImplementationOnce(async () => {
+      throw new Error("no tauri menu");
+    });
+
+    const { result } = renderHook(() =>
+      useSidebarMenus({
+        onDeleteThread: vi.fn(),
+        onSyncThread: vi.fn(),
+        onPinThread: vi.fn(),
+        onUnpinThread: vi.fn(),
+        isThreadPinned: vi.fn(() => false),
+        onRenameThread: vi.fn(),
+        onReloadWorkspaceThreads: vi.fn(),
+        onDeleteWorkspace: vi.fn(),
+        onDeleteWorktree: vi.fn(),
+      }),
+    );
+
+    const event = {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      clientX: 1,
+      clientY: 2,
+    } as unknown as ReactMouseEvent;
+
+    await expect(
+      result.current.showWorkspaceMenu(event, "workspace-1"),
+    ).resolves.toBeUndefined();
+
+    expect(pushErrorToast).toHaveBeenCalledWith({
+      title: "Context menu unavailable",
+      message: "Desktop context menus are unavailable in this environment.",
+    });
   });
 });

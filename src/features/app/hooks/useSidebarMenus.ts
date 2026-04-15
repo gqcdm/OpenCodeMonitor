@@ -30,6 +30,13 @@ export function useSidebarMenus({
   onDeleteWorkspace,
   onDeleteWorktree,
 }: SidebarMenuHandlers) {
+  const showMenuUnavailableToast = useCallback(() => {
+    pushErrorToast({
+      title: "Context menu unavailable",
+      message: "Desktop context menus are unavailable in this environment.",
+    });
+  }, []);
+
   const showThreadMenu = useCallback(
     async (
       event: MouseEvent,
@@ -78,10 +85,14 @@ export function useSidebarMenus({
         );
       }
       items.push(copyItem, archiveItem);
-      const menu = await Menu.new({ items });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(event.clientX, event.clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({ items });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(event.clientX, event.clientY);
+        await menu.popup(position, window);
+      } catch {
+        showMenuUnavailableToast();
+      }
     },
     [
       isThreadPinned,
@@ -90,6 +101,7 @@ export function useSidebarMenus({
       onRenameThread,
       onSyncThread,
       onUnpinThread,
+      showMenuUnavailableToast,
     ],
   );
 
@@ -105,12 +117,16 @@ export function useSidebarMenus({
         text: "Delete",
         action: () => onDeleteWorkspace(workspaceId),
       });
-      const menu = await Menu.new({ items: [reloadItem, deleteItem] });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(event.clientX, event.clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({ items: [reloadItem, deleteItem] });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(event.clientX, event.clientY);
+        await menu.popup(position, window);
+      } catch {
+        showMenuUnavailableToast();
+      }
     },
-    [onReloadWorkspaceThreads, onDeleteWorkspace],
+    [onReloadWorkspaceThreads, onDeleteWorkspace, showMenuUnavailableToast],
   );
 
   const showWorktreeMenu = useCallback(
@@ -151,12 +167,16 @@ export function useSidebarMenus({
         text: "Delete worktree",
         action: () => onDeleteWorktree(worktree.id),
       });
-      const menu = await Menu.new({ items: [reloadItem, revealItem, deleteItem] });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(event.clientX, event.clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({ items: [reloadItem, revealItem, deleteItem] });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(event.clientX, event.clientY);
+        await menu.popup(position, window);
+      } catch {
+        showMenuUnavailableToast();
+      }
     },
-    [onReloadWorkspaceThreads, onDeleteWorktree],
+    [onReloadWorkspaceThreads, onDeleteWorktree, showMenuUnavailableToast],
   );
 
   return { showThreadMenu, showWorkspaceMenu, showWorktreeMenu };
