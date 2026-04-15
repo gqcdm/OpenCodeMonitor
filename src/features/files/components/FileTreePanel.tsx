@@ -27,6 +27,7 @@ import { languageFromPath } from "../../../utils/syntax";
 import { joinWorkspacePath, revealInFileManagerLabel } from "../../../utils/platformPaths";
 import { getFileTypeIconUrl } from "../../../utils/fileTypeIcons";
 import { FilePreviewPopover } from "./FilePreviewPopover";
+import { pushErrorToast } from "../../../services/toasts";
 
 type FileTreeNode = {
   name: string;
@@ -554,29 +555,36 @@ export function FileTreePanel({
     async (event: MouseEvent<HTMLButtonElement>, relativePath: string) => {
       event.preventDefault();
       event.stopPropagation();
-      const menu = await Menu.new({
-        items: [
-          await MenuItem.new({
-            text: "Add to chat",
-            enabled: canInsertText,
-            action: async () => {
-              if (!canInsertText) {
-                return;
-              }
-              onInsertText?.(relativePath);
-            },
-          }),
-          await MenuItem.new({
-            text: revealInFileManagerLabel(),
-            action: async () => {
-              await revealItemInDir(resolvePath(relativePath));
-            },
-          }),
-        ],
-      });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(event.clientX, event.clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({
+          items: [
+            await MenuItem.new({
+              text: "Add to chat",
+              enabled: canInsertText,
+              action: async () => {
+                if (!canInsertText) {
+                  return;
+                }
+                onInsertText?.(relativePath);
+              },
+            }),
+            await MenuItem.new({
+              text: revealInFileManagerLabel(),
+              action: async () => {
+                await revealItemInDir(resolvePath(relativePath));
+              },
+            }),
+          ],
+        });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(event.clientX, event.clientY);
+        await menu.popup(position, window);
+      } catch {
+        pushErrorToast({
+          title: "Context menu unavailable",
+          message: "Desktop file menus are unavailable in this environment.",
+        });
+      }
     },
     [canInsertText, onInsertText, resolvePath],
   );
