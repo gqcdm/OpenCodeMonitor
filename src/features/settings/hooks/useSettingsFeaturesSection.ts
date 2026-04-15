@@ -30,6 +30,9 @@ export const useSettingsFeaturesSection = ({
       const configPath = await getCodexConfigPath();
       await revealItemInDir(configPath);
     } catch (error) {
+      if (error instanceof Error && error.message === "no tauri opener") {
+        return;
+      }
       setOpenConfigError(
         error instanceof Error ? error.message : "Unable to open config.",
       );
