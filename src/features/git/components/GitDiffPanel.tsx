@@ -287,6 +287,13 @@ export function GitDiffPanel({
 
   const githubBaseUrl = useMemo(() => getGitHubBaseUrl(gitRemoteUrl), [gitRemoteUrl]);
 
+  const showContextMenuUnavailableToast = useCallback(() => {
+    pushErrorToast({
+      title: "Context menu unavailable",
+      message: "Desktop git context menus are unavailable in this environment.",
+    });
+  }, []);
+
   const showLogMenu = useCallback(
     async (event: ReactMouseEvent<HTMLDivElement>, entry: GitLogEntry) => {
       event.preventDefault();
@@ -310,12 +317,16 @@ export function GitDiffPanel({
         items.push(openItem);
       }
 
-      const menu = await Menu.new({ items });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(event.clientX, event.clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({ items });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(event.clientX, event.clientY);
+        await menu.popup(position, window);
+      } catch {
+        showContextMenuUnavailableToast();
+      }
     },
-    [githubBaseUrl],
+    [githubBaseUrl, showContextMenuUnavailableToast],
   );
 
   const showPullRequestMenu = useCallback(
@@ -330,12 +341,16 @@ export function GitDiffPanel({
         },
       });
 
-      const menu = await Menu.new({ items: [openItem] });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(event.clientX, event.clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({ items: [openItem] });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(event.clientX, event.clientY);
+        await menu.popup(position, window);
+      } catch {
+        showContextMenuUnavailableToast();
+      }
     },
-    [],
+    [showContextMenuUnavailableToast],
   );
 
   const discardFiles = useCallback(
@@ -505,12 +520,17 @@ export function GitDiffPanel({
         return;
       }
 
-      const menu = await Menu.new({ items });
-      const window = getCurrentWindow();
-      const position = new LogicalPosition(event.clientX, event.clientY);
-      await menu.popup(position, window);
+      try {
+        const menu = await Menu.new({ items });
+        const window = getCurrentWindow();
+        const position = new LogicalPosition(event.clientX, event.clientY);
+        await menu.popup(position, window);
+      } catch {
+        showContextMenuUnavailableToast();
+      }
     },
     [
+      showContextMenuUnavailableToast,
       selectedFiles,
       selectOnlyFile,
       stagedFiles,

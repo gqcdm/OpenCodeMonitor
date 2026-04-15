@@ -245,6 +245,35 @@ describe("GitDiffPanel", () => {
     expect(options.length).toBeGreaterThan(0);
   });
 
+  it("shows a toast when git context menus are unavailable", async () => {
+    const { pushErrorToast } = await import("../../../services/toasts");
+    menuNew.mockImplementationOnce(async () => {
+      throw new Error("no tauri menu");
+    });
+
+    const { container } = render(
+      <GitDiffPanel
+        {...baseProps}
+        workspacePath="/tmp/repo"
+        gitRoot="/tmp/repo"
+        unstagedFiles={[
+          { path: "src/sample.ts", status: "M", additions: 1, deletions: 0 },
+        ]}
+      />,
+    );
+
+    const row = container.querySelector(".diff-row");
+    expect(row).not.toBeNull();
+    fireEvent.contextMenu(row as Element);
+
+    await waitFor(() => {
+      expect(pushErrorToast).toHaveBeenCalledWith({
+        title: "Context menu unavailable",
+        message: "Desktop git context menus are unavailable in this environment.",
+      });
+    });
+  });
+
   it("renders per-file groups and edit rows", () => {
     const onSelectFile = vi.fn();
     const { container } = render(
