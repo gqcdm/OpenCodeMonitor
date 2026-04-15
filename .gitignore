@@ -37,3 +37,4 @@ result
 
 # Project memory (agent context)
 .memory/
+.sisyphus
