@@ -326,3 +326,26 @@ describe("useWorkspaces.addWorkspace (bulk)", () => {
     );
   });
 });
+
+describe("useWorkspaces workspaceGroups normalization", () => {
+  it("treats null workspaceGroups as an empty list", async () => {
+    const listWorkspacesMock = vi.mocked(listWorkspaces);
+    listWorkspacesMock.mockResolvedValue([workspaceOne]);
+
+    const { result } = renderHook(() =>
+      useWorkspaces({
+        appSettings: {
+          workspaceGroups: null,
+        } as never,
+      }),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.groupedWorkspaces).toHaveLength(1);
+    expect(result.current.groupedWorkspaces[0]?.workspaces).toHaveLength(1);
+    expect(result.current.groupedWorkspaces[0]?.workspaces[0]?.id).toBe("ws-1");
+  });
+});

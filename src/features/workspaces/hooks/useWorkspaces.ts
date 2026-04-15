@@ -86,6 +86,9 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
   );
   const workspaceSettingsRef = useRef<Map<string, WorkspaceSettings>>(new Map());
   const { onDebug, defaultCodexBin, appSettings, onUpdateAppSettings } = options;
+  const appWorkspaceGroups = Array.isArray(appSettings?.workspaceGroups)
+    ? appSettings.workspaceGroups
+    : [];
 
   const refreshWorkspaces = useCallback(async () => {
     try {
@@ -132,15 +135,14 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}) {
   }, [workspaces]);
 
   const workspaceGroups = useMemo(() => {
-    const groups = appSettings?.workspaceGroups ?? [];
-    return groups.slice().sort((a, b) => {
+    return appWorkspaceGroups.slice().sort((a, b) => {
       const orderDiff = getSortOrderValue(a.sortOrder) - getSortOrderValue(b.sortOrder);
       if (orderDiff !== 0) {
         return orderDiff;
       }
       return a.name.localeCompare(b.name);
     });
-  }, [appSettings?.workspaceGroups]);
+  }, [appWorkspaceGroups]);
 
   const workspaceGroupById = useMemo(() => {
     const map = new Map<string, WorkspaceGroup>();
