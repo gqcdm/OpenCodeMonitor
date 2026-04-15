@@ -247,8 +247,8 @@ describe("GitDiffPanel", () => {
 
   it("shows a toast when git context menus are unavailable", async () => {
     const { pushErrorToast } = await import("../../../services/toasts");
-    menuNew.mockImplementationOnce(async () => {
-      throw new Error("no tauri menu");
+    menuItemNew.mockImplementationOnce(async () => {
+      throw new Error("no tauri menu item");
     });
 
     const { container } = render(
