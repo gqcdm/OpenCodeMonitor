@@ -194,15 +194,20 @@ export function SettingsCodexSection({
   onUpdateWorkspaceSettings,
 }: SettingsCodexSectionProps) {
   const handleTakeoverWithConfirmation = useCallback(async () => {
-    const confirmed = await ask(
-      "This will stop the existing OpenCode server and start a managed one. Continue?",
-      {
-        title: "Take Over Server",
-        kind: "warning",
-        okLabel: "Take Over",
-        cancelLabel: "Cancel",
-      },
-    );
+    let confirmed = false;
+    try {
+      confirmed = await ask(
+        "This will stop the existing OpenCode server and start a managed one. Continue?",
+        {
+          title: "Take Over Server",
+          kind: "warning",
+          okLabel: "Take Over",
+          cancelLabel: "Cancel",
+        },
+      );
+    } catch {
+      return;
+    }
     if (confirmed) {
       onTakeoverOpenCodeServer();
     }

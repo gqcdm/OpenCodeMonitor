@@ -10,8 +10,13 @@ import {
 } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { ask } from "@tauri-apps/plugin-dialog";
 import type { AppSettings, WorkspaceInfo } from "@/types";
-import { getSettingsModelList } from "@services/tauri";
+import {
+  getOpenCodeServerStatus,
+  getSettingsModelList,
+  takeoverOpenCodeServer,
+} from "@services/tauri";
 import { DEFAULT_COMMIT_MESSAGE_PROMPT } from "@utils/commitMessagePrompt";
 import { SettingsView } from "./SettingsView";
 
@@ -40,6 +45,8 @@ vi.mock("@services/tauri", async () => {
 });
 
 const getSettingsModelListMock = vi.mocked(getSettingsModelList);
+const getOpenCodeServerStatusMock = vi.mocked(getOpenCodeServerStatus);
+const takeoverOpenCodeServerMock = vi.mocked(takeoverOpenCodeServer);
 
 const baseSettings: AppSettings = {
   codexBin: null,
@@ -1550,6 +1557,75 @@ describe("SettingsView Codex defaults", () => {
       expect(getSettingsModelListMock).toHaveBeenCalled();
       expect(modelSelect.value).toBe("gpt-5.1");
     });
+  });
+
+  it("ignores takeover confirmation when dialog is unavailable outside Tauri", async () => {
+    cleanup();
+    vi.mocked(ask).mockRejectedValueOnce(new Error("no tauri dialog"));
+    getOpenCodeServerStatusMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:14096",
+      healthy: true,
+      managed: false,
+      source: "external",
+      version: "test",
+    });
+    takeoverOpenCodeServerMock.mockClear();
+
+    render(
+      <SettingsView
+        workspaceGroups={[]}
+        groupedWorkspaces={[
+          {
+            id: null,
+            name: "Ungrouped",
+            workspaces: [workspace({ id: "w1", name: "Workspace", connected: true })],
+          },
+        ]}
+        ungroupedLabel="Ungrouped"
+        onClose={vi.fn()}
+        onMoveWorkspace={vi.fn()}
+        onDeleteWorkspace={vi.fn()}
+        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
+        reduceTransparency={false}
+        onToggleTransparency={vi.fn()}
+        appSettings={baseSettings}
+        openAppIconById={{}}
+        onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
+        onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
+        onRunCodexUpdate={vi.fn().mockResolvedValue(createUpdateResult())}
+        onUpdateWorkspaceCodexBin={vi.fn().mockResolvedValue(undefined)}
+        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
+        scaleShortcutTitle="Scale shortcut"
+        scaleShortcutText="Use Command +/-"
+        onTestNotificationSound={vi.fn()}
+        onTestSystemNotification={vi.fn()}
+        dictationModelStatus={null}
+        onDownloadDictationModel={vi.fn()}
+        onCancelDictationDownload={vi.fn()}
+        onRemoveDictationModel={vi.fn()}
+        initialSection="codex"
+      />,
+    );
+
+    const takeOverButton = await screen.findByRole("button", { name: "Take Over" });
+
+    await act(async () => {
+      fireEvent.click(takeOverButton);
+    });
+
+    expect(ask).toHaveBeenCalledWith(
+      "This will stop the existing OpenCode server and start a managed one. Continue?",
+      expect.objectContaining({
+        title: "Take Over Server",
+        okLabel: "Take Over",
+        cancelLabel: "Cancel",
+      }),
+    );
+    expect(takeoverOpenCodeServerMock).not.toHaveBeenCalled();
   });
 
   it("preserves provider-qualified selection when providers share the same model slug", async () => {
